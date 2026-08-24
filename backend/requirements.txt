@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+sqlalchemy
+alembic
+pydantic
+pydantic-settings
+python-dotenv
+ortools
+openai
+httpx
+python-multipart
+openpyxl
+reportlab
