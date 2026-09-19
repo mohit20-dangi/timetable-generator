@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { teachersApi, subjectsApi } from '../api/client';
 import { Teacher, Subject } from '../types';
-import { Plus, Edit, Trash2, Save, X, Clock, Calendar } from 'lucide-react';
+import { Plus, Edit, Trash2, Save, X } from 'lucide-react';
+import { BulkUpload } from './BulkUpload';
 
 export function TeacherForm() {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
@@ -17,7 +18,7 @@ export function TeacherForm() {
     availability: [] as Array<{ day: string; start: string; end: string }>,
     preferred_slots: [] as Array<{ day: string; slots: Array<{ start: string; end: string }> }>,
     is_guest_from_other_dept: false,
-    subjects: [] as string[]
+    subject_ids: [] as string[]
   });
 
   const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -67,7 +68,7 @@ export function TeacherForm() {
       id: '', name: '', department: '',
       max_continuous_classes: 3, max_daily_classes: 5,
       availability: [], preferred_slots: [],
-      is_guest_from_other_dept: false, subjects: []
+      is_guest_from_other_dept: false, subject_ids: []
     });
   };
 
@@ -82,7 +83,7 @@ export function TeacherForm() {
       availability: teacher.availability || [],
       preferred_slots: teacher.preferred_slots || [],
       is_guest_from_other_dept: teacher.is_guest_from_other_dept,
-      subjects: []
+      subject_ids: teacher.subject_ids || []
     });
     setShowForm(true);
   };
@@ -118,15 +119,15 @@ export function TeacherForm() {
   };
 
   const toggleSubject = (subjectId: string) => {
-    if (formData.subjects.includes(subjectId)) {
+    if (formData.subject_ids.includes(subjectId)) {
       setFormData({
         ...formData,
-        subjects: formData.subjects.filter(id => id !== subjectId)
+        subject_ids: formData.subject_ids.filter(id => id !== subjectId)
       });
     } else {
       setFormData({
         ...formData,
-        subjects: [...formData.subjects, subjectId]
+        subject_ids: [...formData.subject_ids, subjectId]
       });
     }
   };
@@ -135,17 +136,20 @@ export function TeacherForm() {
     <div>
       <div className="flex justify-between items-center mb-4">
         <h3 className="text-lg font-semibold">Teachers</h3>
-        <button
-          onClick={() => {
-            setShowForm(true);
-            setEditingTeacher(null);
-            resetForm();
-          }}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          <Plus size={20} />
-          Add Teacher
-        </button>
+        <div className="flex gap-2">
+          <BulkUpload label="Teachers" uploadPath="/teachers/bulk" templatePath="/teachers/bulk/template" onDone={fetchTeachers} />
+          <button
+            onClick={() => {
+              setShowForm(true);
+              setEditingTeacher(null);
+              resetForm();
+            }}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            <Plus size={20} />
+            Add Teacher
+          </button>
+        </div>
       </div>
 
       {showForm && (
@@ -392,7 +396,7 @@ export function TeacherForm() {
                     type="button"
                     onClick={() => toggleSubject(subject.id)}
                     className={`p-2 text-left rounded-lg border transition-colors ${
-                      formData.subjects.includes(subject.id)
+                      formData.subject_ids.includes(subject.id)
                         ? 'bg-blue-100 border-blue-500 text-blue-700'
                         : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
                     }`}

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { yearsApi } from '../api/client';
 import { AcademicYear } from '../types';
 import { Plus, Edit, Trash2, Save, X } from 'lucide-react';
+import { BulkUpload } from './BulkUpload';
 
 export function AcademicYearForm() {
   const [years, setYears] = useState<AcademicYear[]>([]);
@@ -10,7 +11,6 @@ export function AcademicYearForm() {
   const [formData, setFormData] = useState({
     id: '',
     name: '',
-    num_sections: 1,
     lunch_start: '',
     lunch_end: ''
   });
@@ -38,7 +38,7 @@ export function AcademicYearForm() {
       }
       setShowForm(false);
       setEditingYear(null);
-      setFormData({ id: '', name: '', num_sections: 1, lunch_start: '', lunch_end: '' });
+      setFormData({ id: '', name: '', lunch_start: '', lunch_end: '' });
       fetchYears();
     } catch (error) {
       console.error('Failed to save year:', error);
@@ -50,7 +50,6 @@ export function AcademicYearForm() {
     setFormData({
       id: year.id,
       name: year.name,
-      num_sections: year.num_sections,
       lunch_start: year.lunch_start || '',
       lunch_end: year.lunch_end || ''
     });
@@ -72,17 +71,20 @@ export function AcademicYearForm() {
     <div>
       <div className="flex justify-between items-center mb-4">
         <h3 className="text-lg font-semibold">Academic Years</h3>
-        <button
-          onClick={() => {
-            setShowForm(true);
-            setEditingYear(null);
-            setFormData({ id: '', name: '', num_sections: 1, lunch_start: '', lunch_end: '' });
-          }}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          <Plus size={20} />
-          Add Year
-        </button>
+        <div className="flex gap-2">
+          <BulkUpload label="Academic Years" uploadPath="/years/bulk" templatePath="/years/bulk/template" onDone={fetchYears} />
+          <button
+            onClick={() => {
+              setShowForm(true);
+              setEditingYear(null);
+              setFormData({ id: '', name: '', lunch_start: '', lunch_end: '' });
+            }}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            <Plus size={20} />
+            Add Year
+          </button>
+        </div>
       </div>
 
       {showForm && (
@@ -108,16 +110,6 @@ export function AcademicYearForm() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 placeholder="e.g., 1st Year"
                 required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Number of Sections</label>
-              <input
-                type="number"
-                min="1"
-                value={formData.num_sections}
-                onChange={(e) => setFormData({ ...formData, num_sections: parseInt(e.target.value) })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
             </div>
             <div>
@@ -168,7 +160,6 @@ export function AcademicYearForm() {
             <tr className="bg-gray-100">
               <th className="text-left px-4 py-2 font-medium text-gray-700">ID</th>
               <th className="text-left px-4 py-2 font-medium text-gray-700">Name</th>
-              <th className="text-left px-4 py-2 font-medium text-gray-700">Sections</th>
               <th className="text-left px-4 py-2 font-medium text-gray-700">Lunch Break</th>
               <th className="text-right px-4 py-2 font-medium text-gray-700">Actions</th>
             </tr>
@@ -178,7 +169,6 @@ export function AcademicYearForm() {
               <tr key={year.id} className="border-b border-gray-200">
                 <td className="px-4 py-2">{year.id}</td>
                 <td className="px-4 py-2">{year.name}</td>
-                <td className="px-4 py-2">{year.num_sections}</td>
                 <td className="px-4 py-2">
                   {year.lunch_start && year.lunch_end 
                     ? `${year.lunch_start} - ${year.lunch_end}` 

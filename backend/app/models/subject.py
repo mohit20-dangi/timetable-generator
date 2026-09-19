@@ -1,14 +1,18 @@
-from sqlalchemy import Column, String, Integer, Boolean, JSON
-from app.db import Base
+from pydantic import BaseModel
+from typing import List, Optional
 
-class Subject(Base):
-    __tablename__ = "subjects"
-    
-    id = Column(String, primary_key=True, index=True)
-    name = Column(String, nullable=False)
-    type = Column(String, nullable=False)  # theory, lab, tutorial
-    weekly_hours = Column(Integer, default=0)
-    needs_continuous_block = Column(Boolean, default=False)
-    block_size = Column(Integer, default=1)
-    requires_room_type = Column(String, nullable=True)  # lecture, lab, seminar
-    requires_equipment = Column(JSON, default=list)
+
+class SubjectCreate(BaseModel):
+    id: str
+    name: str
+    type: str  # theory, lab, tutorial
+    weekly_hours: int = 0
+    needs_continuous_block: bool = False
+    block_size: int = 1
+    requires_room_type: Optional[str] = None  # lecture, lab, seminar
+    requires_equipment: List[str] = []
+    prerequisite_ids: List[str] = []
+
+
+class SubjectResponse(SubjectCreate):
+    pass

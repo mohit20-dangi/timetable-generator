@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { timetableApi, sectionsApi, subjectsApi, teachersApi, roomsApi } from '../api/client';
 import { TimetableEntry, Section, Subject, Teacher, Room } from '../types';
-import { ChevronLeft, Download, Filter, Calendar, Users, BookOpen, MapPin } from 'lucide-react';
+import { ChevronLeft, Download, Users, BookOpen, MapPin } from 'lucide-react';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const PERIODS = [1, 2, 3, 4, 5, 6, 7, 8];
@@ -58,16 +58,6 @@ export function TimetableViewer() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const getEntityName = (entry: TimetableEntry) => {
-    if (entry.section_id && sections[entry.section_id]) {
-      return sections[entry.section_id].name;
-    }
-    if (entry.batch_id) {
-      return `Batch: ${entry.batch_id}`;
-    }
-    return 'Unknown';
   };
 
   const getSubjectName = (subjectId: string) => {

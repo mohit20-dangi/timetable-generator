@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { yearsApi, sectionsApi } from '../api/client';
 import { AcademicYear, Section } from '../types';
 import { Plus, Edit, Trash2, Save, X } from 'lucide-react';
+import { BulkUpload } from './BulkUpload';
 
 export function SectionForm() {
   const [years, setYears] = useState<AcademicYear[]>([]);
@@ -81,17 +82,20 @@ export function SectionForm() {
     <div>
       <div className="flex justify-between items-center mb-4">
         <h3 className="text-lg font-semibold">Sections</h3>
-        <button
-          onClick={() => {
-            setShowForm(true);
-            setEditingSection(null);
-            setFormData({ id: '', year_id: years[0]?.id || '', name: '', strength: 60 });
-          }}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          <Plus size={20} />
-          Add Section
-        </button>
+        <div className="flex gap-2">
+          <BulkUpload label="Sections" uploadPath="/sections/bulk" templatePath="/sections/bulk/template" onDone={fetchSections} />
+          <button
+            onClick={() => {
+              setShowForm(true);
+              setEditingSection(null);
+              setFormData({ id: '', year_id: years[0]?.id || '', name: '', strength: 60 });
+            }}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            <Plus size={20} />
+            Add Section
+          </button>
+        </div>
       </div>
 
       {showForm && (

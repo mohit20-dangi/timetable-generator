@@ -1,15 +1,23 @@
-import { Outlet, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Calendar, Settings, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
+import { Calendar, Settings, ChevronLeft, ChevronRight, LogOut } from 'lucide-react';
 import { useState } from 'react';
+import { useAuth } from '../context/AuthContext';
 
 export function Layout() {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { username, logout } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  
+
   const navItems = [
     { path: '/', label: 'Setup Wizard', icon: Settings },
     { path: '/runs', label: 'Timetable Runs', icon: Calendar },
   ];
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
@@ -51,8 +59,15 @@ export function Layout() {
           </nav>
           
           {/* Footer */}
-          <div className="p-4 border-t border-gray-200">
-            <p className="text-xs text-gray-500 text-center">v1.0.0</p>
+          <div className="p-4 border-t border-gray-200 space-y-2">
+            {username && <p className="text-xs text-gray-500 text-center">Signed in as {username}</p>}
+            <button
+              onClick={handleLogout}
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100"
+            >
+              <LogOut size={16} /> Log out
+            </button>
+            <p className="text-xs text-gray-400 text-center">v2.0.0</p>
           </div>
         </div>
       </aside>

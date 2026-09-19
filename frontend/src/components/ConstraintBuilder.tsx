@@ -7,7 +7,7 @@ export function ConstraintBuilder() {
   const [profiles, setProfiles] = useState<ConstraintProfile[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingProfile, setEditingProfile] = useState<ConstraintProfile | null>(null);
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{ id: string; name: string; soft_constraint_weights: Record<string, number> }>({
     id: '',
     name: '',
     soft_constraint_weights: {

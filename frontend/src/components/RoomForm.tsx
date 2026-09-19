@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { roomsApi } from '../api/client';
 import { Room } from '../types';
 import { Plus, Edit, Trash2, Save, X } from 'lucide-react';
+import { BulkUpload } from './BulkUpload';
 
 export function RoomForm() {
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -16,6 +17,8 @@ export function RoomForm() {
     shared_with_departments: [] as string[],
     availability: [] as Array<{ day: string; start: string; end: string }>
   });
+
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   useEffect(() => {
     fetchRooms();
@@ -79,20 +82,23 @@ export function RoomForm() {
     <div>
       <div className="flex justify-between items-center mb-4">
         <h3 className="text-lg font-semibold">Rooms</h3>
-        <button
-          onClick={() => {
-            setShowForm(true);
-            setEditingRoom(null);
-            setFormData({
-              id: '', name: '', type: 'lecture', capacity: 60,
-              equipment: [], shared_with_departments: []
-            });
-          }}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          <Plus size={20} />
-          Add Room
-        </button>
+        <div className="flex gap-2">
+          <BulkUpload label="Rooms" uploadPath="/rooms/bulk" templatePath="/rooms/bulk/template" onDone={fetchRooms} />
+          <button
+            onClick={() => {
+              setShowForm(true);
+              setEditingRoom(null);
+              setFormData({
+                id: '', name: '', type: 'lecture', capacity: 60,
+                equipment: [], shared_with_departments: [], availability: []
+              });
+            }}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            <Plus size={20} />
+            Add Room
+          </button>
+        </div>
       </div>
 
       {showForm && (

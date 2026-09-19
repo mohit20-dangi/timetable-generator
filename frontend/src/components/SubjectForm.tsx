@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { subjectsApi, sectionsApi, constraintsApi } from '../api/client';
+import { subjectsApi, sectionsApi } from '../api/client';
 import { Subject, Section } from '../types';
 import { Plus, Edit, Trash2, Save, X, Link } from 'lucide-react';
+import { BulkUpload } from './BulkUpload';
 
 export function SubjectForm() {
   const [subjects, setSubjects] = useState<Subject[]>([]);
@@ -39,9 +40,8 @@ export function SubjectForm() {
       const response = await sectionsApi.list();
       setSections(response.data);
       const subjMap: Record<string, string[]> = {};
-      for (const section of response.data) {
-        const ssResponse = await constraintsApi.getSectionSubjects(section.id);
-        subjMap[section.id] = ssResponse.data.map((ss: any) => ss.subject_id);
+      for (const section of response.data as Section[]) {
+        subjMap[section.id] = (section.subjects || []).map((ss) => ss.subject_id);
       }
       setSectionSubjects(subjMap);
     } catch (error) {
@@ -100,13 +100,13 @@ export function SubjectForm() {
     try {
       const current = sectionSubjects[sectionId] || [];
       if (current.includes(subjectId)) {
-        await constraintsApi.removeSectionSubject(sectionId, subjectId);
+        await sectionsApi.removeSubject(sectionId, subjectId);
         setSectionSubjects({
           ...sectionSubjects,
           [sectionId]: current.filter(id => id !== subjectId)
         });
       } else {
-        await constraintsApi.addSectionSubject({ section_id: sectionId, subject_id: subjectId });
+        await sectionsApi.addSubject(sectionId, { subject_id: subjectId });
         setSectionSubjects({
           ...sectionSubjects,
           [sectionId]: [...current, subjectId]
@@ -121,21 +121,24 @@ export function SubjectForm() {
     <div>
       <div className="flex justify-between items-center mb-4">
         <h3 className="text-lg font-semibold">Subjects</h3>
-        <button
-          onClick={() => {
-            setShowForm(true);
-            setEditingSubject(null);
-            setFormData({
-              id: '', name: '', type: 'theory', weekly_hours: 0,
-              needs_continuous_block: false, block_size: 1,
-              requires_room_type: null, requires_equipment: []
-            });
-          }}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          <Plus size={20} />
-          Add Subject
-        </button>
+        <div className="flex gap-2">
+          <BulkUpload label="Subjects" uploadPath="/subjects/bulk" templatePath="/subjects/bulk/template" onDone={fetchSubjects} />
+          <button
+            onClick={() => {
+              setShowForm(true);
+              setEditingSubject(null);
+              setFormData({
+                id: '', name: '', type: 'theory', weekly_hours: 0,
+                needs_continuous_block: false, block_size: 1,
+                requires_room_type: null, requires_equipment: []
+              });
+            }}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            <Plus size={20} />
+            Add Subject
+          </button>
+        </div>
       </div>
 
       {showForm && (

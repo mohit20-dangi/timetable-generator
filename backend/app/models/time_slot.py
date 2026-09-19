@@ -1,11 +1,13 @@
-from sqlalchemy import Column, String, Integer, Time
-from app.db import Base
+from pydantic import BaseModel
 
-class TimeSlot(Base):
-    __tablename__ = "time_slots"
-    
-    id = Column(String, primary_key=True, index=True)
-    day = Column(String, nullable=False)  # Mon, Tue, Wed, Thu, Fri, Sat
-    period_index = Column(Integer, nullable=False)
-    start_time = Column(Time, nullable=False)
-    end_time = Column(Time, nullable=False)
+
+class TimeSlotCreate(BaseModel):
+    id: str
+    day: str
+    period_index: int
+    start_time: str  # "HH:MM"
+    end_time: str
+
+
+class TimeSlotResponse(TimeSlotCreate):
+    pass

@@ -6,16 +6,26 @@ from app.core.config import settings
 
 class NVIDIAClient:
     def __init__(self):
-        api_key = settings.NVIDIA_API_KEY or os.getenv("NVIDIA_API_KEY")
-        if not api_key:
-            raise ValueError("NVIDIA_API_KEY not found in environment or settings")
-        
-        self.client = OpenAI(
-            base_url=settings.NVIDIA_BASE_URL,
-            api_key=api_key
-        )
+        self._client: Optional[OpenAI] = None
         self.model = settings.NVIDIA_MODEL
-    
+
+    @property
+    def client(self) -> OpenAI:
+        """Lazily construct the underlying OpenAI client on first use.
+
+        Deferred so a missing NVIDIA_API_KEY only breaks LLM endpoints,
+        not the whole app at import/startup time.
+        """
+        if self._client is None:
+            api_key = settings.NVIDIA_API_KEY or os.getenv("NVIDIA_API_KEY")
+            if not api_key:
+                raise ValueError("NVIDIA_API_KEY not found in environment or settings")
+            self._client = OpenAI(
+                base_url=settings.NVIDIA_BASE_URL,
+                api_key=api_key
+            )
+        return self._client
+
     def parse_constraints(self, text: str) -> Dict[str, Any]:
         """Parse natural language constraints into structured JSON."""
         system_prompt = """You are a timetable constraint parser. Convert natural language descriptions into structured JSON following this exact schema:

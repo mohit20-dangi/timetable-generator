@@ -1,13 +1,38 @@
-from sqlalchemy import Column, String, Integer, ForeignKey
-from sqlalchemy.orm import relationship
-from app.db import Base
+from pydantic import BaseModel
+from typing import List, Optional
 
-class Section(Base):
-    __tablename__ = "sections"
-    
-    id = Column(String, primary_key=True, index=True)
-    year_id = Column(String, ForeignKey("academic_years.id"), nullable=False)
-    name = Column(String, nullable=False)
-    strength = Column(Integer, default=60)
-    
-    year = relationship("AcademicYear", backref="sections")
+
+class SectionSubjectLink(BaseModel):
+    subject_id: str
+    is_elective: bool = False
+    elective_group_id: Optional[str] = None
+
+
+class LabBatch(BaseModel):
+    id: str
+    batch_name: str
+    strength: int = 30
+
+
+class SectionCreate(BaseModel):
+    id: str
+    year_id: str
+    name: str
+    strength: int = 60
+
+
+class SectionResponse(SectionCreate):
+    subjects: List[SectionSubjectLink] = []
+    lab_batches: List[LabBatch] = []
+
+
+class SectionSubjectAdd(BaseModel):
+    subject_id: str
+    is_elective: bool = False
+    elective_group_id: Optional[str] = None
+
+
+class LabBatchCreate(BaseModel):
+    id: str
+    batch_name: str
+    strength: int = 30

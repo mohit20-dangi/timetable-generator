@@ -1,15 +1,34 @@
-from sqlalchemy import Column, String, Integer, Boolean, JSON, ForeignKey
-from sqlalchemy.orm import relationship
-from app.db import Base
+from pydantic import BaseModel
+from typing import List, Optional
 
-class Teacher(Base):
-    __tablename__ = "teachers"
-    
-    id = Column(String, primary_key=True, index=True)
-    name = Column(String, nullable=False)
-    department = Column(String, nullable=True)
-    max_continuous_classes = Column(Integer, default=3)
-    max_daily_classes = Column(Integer, default=5)
-    availability = Column(JSON, default=list)  # [{"day": "Mon", "start": "09:00", "end": "16:00"}]
-    preferred_slots = Column(JSON, default=list)  # [{"day": "Mon", "slots": [{"start": "09:00", "end": "11:00"}, {"start": "13:00", "end": "15:00"}]}]
-    is_guest_from_other_dept = Column(Boolean, default=False)
+
+class AvailabilitySlot(BaseModel):
+    day: str
+    start: str
+    end: str
+
+
+class PreferredSlotInterval(BaseModel):
+    start: str
+    end: str
+
+
+class PreferredSlot(BaseModel):
+    day: str
+    slots: List[PreferredSlotInterval] = []
+
+
+class TeacherCreate(BaseModel):
+    id: str
+    name: str
+    department: Optional[str] = None
+    subject_ids: List[str] = []
+    max_continuous_classes: int = 3
+    max_daily_classes: int = 5
+    availability: List[AvailabilitySlot] = []
+    preferred_slots: List[PreferredSlot] = []
+    is_guest_from_other_dept: bool = False
+
+
+class TeacherResponse(TeacherCreate):
+    pass

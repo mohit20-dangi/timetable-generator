@@ -1,13 +1,15 @@
 fastapi
 uvicorn
-sqlalchemy
-alembic
+pymongo
 pydantic
 pydantic-settings
 python-dotenv
+bcrypt
+pyjwt
 ortools
 openai
 httpx
 python-multipart
 openpyxl
 reportlab
+pandas

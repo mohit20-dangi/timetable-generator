@@ -7,6 +7,45 @@ const api = axios.create({
   },
 });
 
+// Attach the admin JWT (if present) to every request.
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('access_token');
+  if (token) {
+    config.headers = config.headers ?? {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// A 401 means the token is missing/expired - drop it and send the user to log in.
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem('access_token');
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
+export const authApi = {
+  login: (username: string, password: string) => {
+    const form = new URLSearchParams();
+    form.set('username', username);
+    form.set('password', password);
+    return axios.post('/api/auth/login', form, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+  },
+  register: (data: { invite_token: string; username: string; password: string }) =>
+    api.post('/auth/register', data),
+  createInvite: () => api.post('/auth/invites', {}),
+  me: () => api.get('/auth/me'),
+};
+
 export const yearsApi = {
   list: () => api.get('/years'),
   create: (data: any) => api.post('/years', data),
@@ -20,6 +59,14 @@ export const sectionsApi = {
   get: (id: string) => api.get(`/sections/${id}`),
   getByYear: (yearId: string) => api.get(`/sections/year/${yearId}`),
   delete: (id: string) => api.delete(`/sections/${id}`),
+
+  addSubject: (sectionId: string, data: any) => api.post(`/sections/${sectionId}/subjects`, data),
+  removeSubject: (sectionId: string, subjectId: string) =>
+    api.delete(`/sections/${sectionId}/subjects/${subjectId}`),
+
+  createLabBatch: (sectionId: string, data: any) => api.post(`/sections/${sectionId}/lab-batches`, data),
+  deleteLabBatch: (sectionId: string, batchId: string) =>
+    api.delete(`/sections/${sectionId}/lab-batches/${batchId}`),
 };
 
 export const subjectsApi = {
@@ -27,6 +74,11 @@ export const subjectsApi = {
   create: (data: any) => api.post('/subjects', data),
   get: (id: string) => api.get(`/subjects/${id}`),
   delete: (id: string) => api.delete(`/subjects/${id}`),
+
+  addPrerequisite: (subjectId: string, requiresSubjectId: string) =>
+    api.post(`/subjects/${subjectId}/prerequisites/${requiresSubjectId}`),
+  removePrerequisite: (subjectId: string, requiresSubjectId: string) =>
+    api.delete(`/subjects/${subjectId}/prerequisites/${requiresSubjectId}`),
 };
 
 export const teachersApi = {
@@ -46,32 +98,17 @@ export const roomsApi = {
 };
 
 export const constraintsApi = {
-  // Section-Subjects
-  addSectionSubject: (data: any) => api.post('/constraints/section-subjects', data),
-  getSectionSubjects: (sectionId: string) => api.get(`/constraints/section-subjects/${sectionId}`),
-  removeSectionSubject: (sectionId: string, subjectId: string) => api.delete(`/constraints/section-subjects/${sectionId}/${subjectId}`),
-  
-  // Lab Batches
-  createLabBatch: (data: any) => api.post('/constraints/lab-batches', data),
-  getLabBatches: (sectionId: string) => api.get(`/constraints/lab-batches/${sectionId}`),
-  deleteLabBatch: (id: string) => api.delete(`/constraints/lab-batches/${id}`),
-  
-  // Prerequisites
-  addPrerequisite: (data: any) => api.post('/constraints/prerequisites', data),
-  listPrerequisites: () => api.get('/constraints/prerequisites'),
-  removePrerequisite: (subjectId: string, requiresSubjectId: string) => api.delete(`/constraints/prerequisites/${subjectId}/${requiresSubjectId}`),
-  
   // Time Slots
   createTimeSlot: (data: any) => api.post('/constraints/time-slots', data),
   listTimeSlots: () => api.get('/constraints/time-slots'),
   deleteTimeSlot: (id: string) => api.delete(`/constraints/time-slots/${id}`),
-  
+
   // Constraint Profiles
   createProfile: (data: any) => api.post('/constraints/profiles', data),
   listProfiles: () => api.get('/constraints/profiles'),
   getProfile: (id: string) => api.get(`/constraints/profiles/${id}`),
   deleteProfile: (id: string) => api.delete(`/constraints/profiles/${id}`),
-  
+
   // LLM
   parseNL: (text: string) => api.post('/constraints/parse-nl', { text }),
   prototype: (text: string) => api.post('/constraints/prototype', { text }),
@@ -84,6 +121,19 @@ export const timetableApi = {
   getEntries: (runId: number) => api.get(`/timetable/runs/${runId}/entries`),
   explain: (runId: number) => api.get(`/timetable/runs/${runId}/explain`),
   export: (runId: number, format: string) => api.get(`/timetable/runs/${runId}/export`, { params: { format }, responseType: 'blob' }),
+};
+
+// No-auth endpoints meant for the public college-website integration.
+export const publicApi = {
+  sections: (runId?: number) => api.get('/public/timetables/sections', { params: { run_id: runId } }),
+  section: (sectionId: string, runId?: number) =>
+    api.get(`/public/timetables/sections/${sectionId}`, { params: { run_id: runId } }),
+  faculty: (runId?: number) => api.get('/public/timetables/faculty', { params: { run_id: runId } }),
+  facultyMember: (teacherId: string, runId?: number) =>
+    api.get(`/public/timetables/faculty/${teacherId}`, { params: { run_id: runId } }),
+  rooms: (runId?: number) => api.get('/public/timetables/rooms', { params: { run_id: runId } }),
+  room: (roomId: string, runId?: number) =>
+    api.get(`/public/timetables/rooms/${roomId}`, { params: { run_id: runId } }),
 };
 
 export default api;
