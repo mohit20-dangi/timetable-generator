@@ -53,3 +53,7 @@ def require_roles(*allowed_roles: str):
 # Convenience shortcuts used throughout the routers
 require_admin = require_roles("ADMIN")
 require_admin_or_faculty = require_roles("ADMIN", "FACULTY")
+# HOD = department coordinator: can generate/edit/publish timetables, but
+# only for their own department (see _assert_department_access in
+# routers/timetable.py - role membership alone isn't enough here).
+require_admin_or_hod = require_roles("ADMIN", "HOD")

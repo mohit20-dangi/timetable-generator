@@ -6,7 +6,7 @@ export function ProtectedRoute({
   allowedRoles,
 }: {
   children: JSX.Element;
-  allowedRoles?: Array<'ADMIN' | 'FACULTY' | 'STUDENT'>;
+  allowedRoles?: Array<'ADMIN' | 'HOD' | 'FACULTY' | 'STUDENT'>;
 }) {
   const { user, loading } = useAuth();
 

@@ -22,66 +22,91 @@ from app.core.config import settings
 from app.models import Teacher
 
 try:
-    import anthropic
+    from openai import OpenAI
 except ImportError:  # pragma: no cover
-    anthropic = None
+    OpenAI = None
 
 MAX_TOOL_ITERATIONS = 6
 
 TOOLS = [
     {
-        "name": "find_teachers",
-        "description": "List teachers in this department, optionally filtered by a substring of their name.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name_contains": {"type": "string", "description": "Optional case-insensitive substring filter."},
+        "type": "function",
+        "function": {
+            "name": "find_teachers",
+            "description": "List teachers in this department, optionally filtered by a substring of their name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name_contains": {"type": "string", "description": "Optional case-insensitive substring filter."},
+                },
             },
         },
     },
     {
-        "name": "propose_update_teacher_limits",
-        "description": (
-            "Propose changing one numeric limit for a set of teachers. Does NOT apply the change - "
-            "it only adds it to the plan for the admin to review. Use teacher ids returned by "
-            "find_teachers, never invented ones."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "teacher_ids": {"type": "array", "items": {"type": "string"}},
-                "field": {
-                    "type": "string",
-                    "enum": ["max_daily_classes", "max_weekly_hours", "max_continuous_classes"],
+        "type": "function",
+        "function": {
+            "name": "propose_update_teacher_limits",
+            "description": (
+                "Propose changing one numeric limit for a set of teachers. Does NOT apply the change - "
+                "it only adds it to the plan for the admin to review. Use teacher ids returned by "
+                "find_teachers, never invented ones."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "teacher_ids": {"type": "array", "items": {"type": "string"}},
+                    "field": {
+                        "type": "string",
+                        "enum": ["max_daily_classes", "max_weekly_hours", "max_continuous_classes"],
+                    },
+                    "delta": {"type": "integer", "description": "Add this amount to the current value (use this OR new_value, not both)."},
+                    "new_value": {"type": "integer", "description": "Set the field to exactly this value (use this OR delta, not both)."},
                 },
-                "delta": {"type": "integer", "description": "Add this amount to the current value (use this OR new_value, not both)."},
-                "new_value": {"type": "integer", "description": "Set the field to exactly this value (use this OR delta, not both)."},
+                "required": ["teacher_ids", "field"],
             },
-            "required": ["teacher_ids", "field"],
         },
     },
     {
-        "name": "propose_constraint_rule",
-        "description": (
-            "Propose a new scheduling constraint (e.g. 'Prof Sharma is unavailable Friday afternoons'). "
-            "Does NOT apply it - only adds it to the plan for review."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "rule_type": {
-                    "type": "string",
-                    "enum": ["teacher_unavailable", "room_unavailable", "section_unavailable", "teacher_preferred", "custom"],
+        "type": "function",
+        "function": {
+            "name": "propose_constraint_rule",
+            "description": (
+                "Propose a new scheduling constraint (e.g. 'Prof Sharma is unavailable Friday afternoons'). "
+                "Does NOT apply it - only adds it to the plan for review."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "rule_type": {
+                        "type": "string",
+                        "enum": [
+                            "teacher_unavailable", "room_unavailable", "section_unavailable",
+                            "teacher_preferred", "batch_scheduling_mode", "custom",
+                        ],
+                    },
+                    "target_type": {"type": "string", "enum": ["teacher", "room", "section", "subject"]},
+                    "target_id": {"type": "string"},
+                    "day": {"type": ["string", "null"], "enum": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun", None]},
+                    "start_time": {"type": ["string", "null"], "description": "HH:MM or null"},
+                    "end_time": {"type": ["string", "null"], "description": "HH:MM or null"},
+                    "priority": {"type": "string", "enum": ["hard", "soft"]},
+                    "batch_mode": {
+                        "type": ["string", "null"],
+                        "enum": ["independent", "parallel", "sequential", "merged", None],
+                        "description": (
+                            "Only for rule_type='batch_scheduling_mode' (target_type must be 'subject', "
+                            "target_id the subject's id): how that subject's lab batches should run - "
+                            "'parallel' (same time, separate rooms), 'sequential' (never at the same time), "
+                            "or 'merged' (same time, same room, same teacher - one combined class). If day/"
+                            "start_time/end_time are also set, the subject's batch sessions are additionally "
+                            "confined to that window - use this for 'only merge/run them together during "
+                            "period X because that's the only slot a teacher/room allows it'."
+                        ),
+                    },
+                    "description": {"type": "string"},
                 },
-                "target_type": {"type": "string", "enum": ["teacher", "room", "section", "subject"]},
-                "target_id": {"type": "string"},
-                "day": {"type": ["string", "null"], "enum": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun", None]},
-                "start_time": {"type": ["string", "null"], "description": "HH:MM or null"},
-                "end_time": {"type": ["string", "null"], "description": "HH:MM or null"},
-                "priority": {"type": "string", "enum": ["hard", "soft"]},
-                "description": {"type": "string"},
+                "required": ["rule_type", "target_type", "target_id", "priority", "description"],
             },
-            "required": ["rule_type", "target_type", "target_id", "priority", "description"],
         },
     },
 ]
@@ -109,34 +134,35 @@ def _apply_teacher_filter(db: Session, department_id: str, name_contains: str = 
 
 
 def run_agent_plan(db: Session, department_id: str, instruction: str) -> Dict[str, Any]:
-    if not settings.ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY is not configured. The AI assistant is disabled until an operator sets it.")
-    if anthropic is None:
-        raise RuntimeError("The anthropic package is not installed.")
+    if not settings.LLM_API_KEY:
+        raise RuntimeError("LLM_API_KEY is not configured. The AI assistant is disabled until an operator sets it.")
+    if OpenAI is None:
+        raise RuntimeError("The openai package is not installed.")
 
-    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    client = OpenAI(api_key=settings.LLM_API_KEY, base_url=settings.LLM_BASE_URL)
     actions: List[Dict[str, Any]] = []
-    messages = [{"role": "user", "content": f"Department: {department_id}\nInstruction: {instruction}"}]
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": f"Department: {department_id}\nInstruction: {instruction}"},
+    ]
 
     final_text = ""
     for _ in range(MAX_TOOL_ITERATIONS):
-        response = client.messages.create(
-            model=settings.ANTHROPIC_MODEL, max_tokens=2048,
-            system=SYSTEM_PROMPT, tools=TOOLS, messages=messages,
+        response = client.chat.completions.create(
+            model=settings.LLM_MODEL, max_tokens=2048,
+            tools=TOOLS, messages=messages,
         )
-        messages.append({"role": "assistant", "content": response.content})
+        message = response.choices[0].message
+        messages.append(message.model_dump(exclude_none=True))
 
-        if response.stop_reason != "tool_use":
-            final_text = "".join(b.text for b in response.content if getattr(b, "type", None) == "text")
+        if not message.tool_calls:
+            final_text = message.content or ""
             break
 
-        tool_results = []
-        for block in response.content:
-            if getattr(block, "type", None) != "tool_use":
-                continue
-            result_text = _execute_tool(db, department_id, block.name, block.input, actions)
-            tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": result_text})
-        messages.append({"role": "user", "content": tool_results})
+        for tool_call in message.tool_calls:
+            tool_input = json.loads(tool_call.function.arguments or "{}")
+            result_text = _execute_tool(db, department_id, tool_call.function.name, tool_input, actions)
+            messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": result_text})
     else:
         final_text = "Reached the maximum number of steps for this instruction; review the proposals below."
 

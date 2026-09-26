@@ -65,10 +65,10 @@ for day in DAYS:
             "start_time": start, "end_time": end,
         })
 
-print("\nCreating academic year (III Year CSE) with lunch 11:30-12:30...")
+print("\nCreating academic year (III Year CSE) with lunch 11:30-12:30 every weekday...")
 post("/api/years/", {
     "id": "cse_y3", "name": "III Year", "department_id": "cse", "num_sections": 1,
-    "lunch_start": "11:30:00", "lunch_end": "12:30:00",
+    "lunch_windows": {day: ["11:30", "12:30"] for day in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]},
 })
 
 print("\nCreating sections...")
@@ -97,7 +97,7 @@ post("/api/subjects/", {
 post("/api/subjects/", {
     "id": "dbms_lab", "name": "DBMS Lab", "type": "lab", "department_id": "cse",
     "category": "PCC-LC", "delivery_mode": "IN_PERSON", "scheme_hours_per_week": 2, "weekly_hours": 2,
-    "needs_continuous_block": True, "block_size": 2, "requires_room_type": "lab",
+    "periods_per_session": 2, "back_to_back": True, "requires_room_type": "lab",
 })
 post("/api/subjects/", {
     "id": "envsci", "name": "Environmental Science", "type": "theory", "department_id": "cse",

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { constraintsApi, timetableApi } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { DAYS, DAY_LABELS, DEFAULT_SLOTS, ScheduleSlot, timeLabel } from '../utils/schedule';
+import { CalendarPlus } from 'lucide-react';
 
 interface Entry {
   id: number;
@@ -19,6 +20,24 @@ export function MyTimetable() {
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [slots, setSlots] = useState<ScheduleSlot[]>(DEFAULT_SLOTS);
+  const [calendarError, setCalendarError] = useState('');
+
+  const handleAddToCalendar = async () => {
+    setCalendarError('');
+    try {
+      const response = await timetableApi.myCalendar();
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'my-timetable.ics';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch {
+      setCalendarError('Could not download your calendar file.');
+    }
+  };
 
   useEffect(() => {
     timetableApi
@@ -51,10 +70,22 @@ export function MyTimetable() {
 
   return (
     <div>
-      <h1 className="text-lg font-bold text-gray-900 mb-1">My Timetable</h1>
-      <p className="text-sm text-gray-500 mb-6">
-        {user?.role === 'FACULTY' ? 'Your teaching schedule.' : 'Your class schedule.'}
-      </p>
+      <div className="flex items-start justify-between mb-6">
+        <div>
+          <h1 className="text-lg font-bold text-gray-900 mb-1">My Timetable</h1>
+          <p className="text-sm text-gray-500">
+            {user?.role === 'FACULTY' ? 'Your teaching schedule.' : 'Your class schedule.'}
+          </p>
+        </div>
+        <button
+          onClick={handleAddToCalendar}
+          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm"
+        >
+          <CalendarPlus size={18} />
+          Add to my calendar
+        </button>
+      </div>
+      {calendarError && <p className="mb-4 text-sm text-red-600">{calendarError}</p>}
 
       <div className="overflow-x-auto">
         <table className="min-w-full border border-gray-200 text-sm">

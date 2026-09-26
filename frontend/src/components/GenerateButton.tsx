@@ -1,11 +1,13 @@
-import { useState, useEffect } from 'react';
-import { timetableApi, constraintsApi, yearsApi, sectionsApi } from '../api/client';
-import { TimetableRun, ConstraintProfile, AcademicYear, Section, ScopeMode } from '../types';
+import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { timetableApi, constraintsApi, yearsApi, sectionsApi, academicTermsApi } from '../api/client';
+import { TimetableRun, ConstraintProfile, AcademicYear, Section, AcademicTerm, ScopeMode } from '../types';
 import { useDepartment } from '../context/DepartmentContext';
-import { Play, RefreshCw, CheckCircle, XCircle, AlertCircle, ShieldAlert } from 'lucide-react';
+import { Play, RefreshCw, CheckCircle, XCircle, AlertCircle, AlertTriangle } from 'lucide-react';
 
 export function GenerateButton() {
-  const { departmentId, departments } = useDepartment();
+  const { departmentId } = useDepartment();
+  const navigate = useNavigate();
   const [profiles, setProfiles] = useState<ConstraintProfile[]>([]);
   const [selectedProfile, setSelectedProfile] = useState<string>('');
   const [numAlternatives, setNumAlternatives] = useState(3);
@@ -14,17 +16,28 @@ export function GenerateButton() {
   const [error, setError] = useState<string | null>(null);
   const [years, setYears] = useState<AcademicYear[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
+  const [terms, setTerms] = useState<AcademicTerm[]>([]);
+  const [selectedTerm, setSelectedTerm] = useState('');
   const [generationScope, setGenerationScope] = useState<'all' | 'year' | 'sections'>('all');
   const [selectedYear, setSelectedYear] = useState('');
   const [selectedSections, setSelectedSections] = useState<string[]>([]);
   const [scopeMode, setScopeMode] = useState<ScopeMode>('fit_into_existing');
 
+  // setTimeout closures otherwise capture the isGenerating value from the
+  // render that scheduled them - by the time the 5-minute timer fires,
+  // that stale `false`/`true` never reflects a run that finished (or
+  // didn't) in between, so the abort silently never fires. A ref always
+  // reads the current value.
+  const isGeneratingRef = useRef(isGenerating);
+  useEffect(() => { isGeneratingRef.current = isGenerating; }, [isGenerating]);
+
   useEffect(() => {
     fetchProfiles();
-    Promise.all([yearsApi.list(), sectionsApi.list()])
-      .then(([yearsResponse, sectionsResponse]) => {
+    Promise.all([yearsApi.list(), sectionsApi.list(), academicTermsApi.list()])
+      .then(([yearsResponse, sectionsResponse, termsResponse]) => {
         setYears(yearsResponse.data);
         setSections(sectionsResponse.data);
+        setTerms(termsResponse.data);
         setSelectedYear(yearsResponse.data[0]?.id || '');
       })
       .catch((loadError) => console.error('Failed to fetch generation scope data:', loadError));
@@ -44,11 +57,11 @@ export function GenerateButton() {
 
   const handleGenerate = async () => {
     if (!departmentId) {
-      setError('Select a department first (see the Department step).');
+      setError('No department is configured yet. Add one from Settings.');
       return;
     }
     if (!selectedProfile) {
-      setError('Please select a constraint profile');
+      setError('Please select a scheduling priorities profile');
       return;
     }
 
@@ -75,22 +88,28 @@ export function GenerateButton() {
       const response = await timetableApi.generate({
         department_id: departmentId,
         constraint_profile_id: selectedProfile,
+        term_id: selectedTerm || undefined,
         num_alternatives: numAlternatives,
         scope_mode: scopeMode,
         ...scope,
       });
       const run = response.data;
       setCurrentRun(run);
-      
+
       // Poll for completion
       const pollInterval = setInterval(async () => {
         try {
           const updatedRun = await timetableApi.getRun(run.id);
           setCurrentRun(updatedRun.data);
-          
+
           if (updatedRun.data.status === 'completed' || updatedRun.data.status === 'failed') {
             clearInterval(pollInterval);
             setIsGenerating(false);
+            if (updatedRun.data.status === 'completed') {
+              // Land on the finished timetable instead of leaving the admin
+              // on this page with a link to go find it elsewhere (Phase 3.9).
+              navigate(`/runs/${updatedRun.data.id}`);
+            }
           }
         } catch (error) {
           clearInterval(pollInterval);
@@ -98,16 +117,25 @@ export function GenerateButton() {
           setError('Failed to check run status');
         }
       }, 2000);
-      
-      // Timeout after 5 minutes
+
+      // Abort if the run is still going well past what the backend could
+      // legitimately need. The backend caps each alternative's solve at its
+      // own time budget (SOLVER_MAX_SECONDS, 300s by default) and solves
+      // them one after another - so num_alternatives=3 can genuinely take
+      // ~15 minutes. A fixed 5-minute abort fired on nearly every request
+      // with the UI's own default of 3 alternatives, well before the
+      // backend had a chance to finish (it wasn't hung, just still working).
+      // 6 min/alternative plus a 2-minute buffer for model build/extraction/
+      // validation covers that with room to spare.
+      const abortMs = numAlternatives * 360000 + 120000;
       setTimeout(() => {
         clearInterval(pollInterval);
-        if (isGenerating) {
+        if (isGeneratingRef.current) {
           setIsGenerating(false);
-          setError('Generation timed out after 5 minutes');
+          setError(`Generation timed out after ${Math.round(abortMs / 60000)} minutes`);
         }
-      }, 300000);
-      
+      }, abortMs);
+
     } catch (error: any) {
       setIsGenerating(false);
       setError(error.response?.data?.detail || 'Failed to start generation');
@@ -131,31 +159,26 @@ export function GenerateButton() {
     <div className="max-w-2xl mx-auto">
       <div className="text-center mb-8">
         <h2 className="text-2xl font-bold text-gray-900 mb-2">Generate Timetable</h2>
-        <p className="text-gray-600">Run the CP-SAT solver to generate a conflict-free timetable</p>
+        <p className="text-gray-600">Create a clash-free timetable from the information you've entered.</p>
       </div>
 
       <div className="bg-white rounded-lg border border-gray-200 p-6">
         {!departmentId && (
           <div className="mb-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-            <ShieldAlert size={18} />
-            Select a department in the Department step before generating.
+            <AlertTriangle size={18} />
+            No department is configured yet. Add one from Settings.
           </div>
-        )}
-        {departmentId && (
-          <p className="mb-4 text-sm text-gray-500">
-            Generating for: <span className="font-medium text-gray-800">{departments.find((d) => d.id === departmentId)?.name || departmentId}</span>
-          </p>
         )}
 
         <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
           <label className="block text-sm font-medium text-gray-700 mb-2">
-            If sections outside this scope already have a published timetable
+            Other years already have timetables
           </label>
           <div className="space-y-2">
             <label className="flex items-start gap-2 text-sm">
               <input type="radio" checked={scopeMode === 'fit_into_existing'} onChange={() => setScopeMode('fit_into_existing')} className="mt-1" />
               <span>
-                <span className="font-medium text-gray-900">Fit into the existing timetable (recommended)</span>
+                <span className="font-medium text-gray-900">Keep the other years' timetables valid (recommended)</span>
                 <br />
                 <span className="text-gray-600">Every already-published class outside this scope is treated as fixed - the new schedule can never clash with them.</span>
               </span>
@@ -163,16 +186,16 @@ export function GenerateButton() {
             <label className="flex items-start gap-2 text-sm">
               <input type="radio" checked={scopeMode === 'fresh'} onChange={() => setScopeMode('fresh')} className="mt-1" />
               <span>
-                <span className="font-medium text-gray-900">Start fresh</span>
+                <span className="font-medium text-gray-900">Ignore other years - I'll redo them too</span>
                 <br />
-                <span className="text-gray-600">Ignore everything outside this scope. Faster and more flexible, but it may clash with other sections or departments that share a teacher or room.</span>
+                <span className="text-gray-600">Faster and more flexible, but it may clash with other sections or departments that share a teacher or room.</span>
               </span>
             </label>
           </div>
         </div>
 
         <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-2">Constraint Profile</label>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Scheduling priorities</label>
           <select
             value={selectedProfile}
             onChange={(e) => setSelectedProfile(e.target.value)}
@@ -185,6 +208,24 @@ export function GenerateButton() {
             ))}
           </select>
         </div>
+
+        {terms.filter((term) => term.department_id === departmentId).length > 0 && (
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">Term (optional)</label>
+            <select
+              value={selectedTerm}
+              onChange={(e) => setSelectedTerm(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              disabled={isGenerating}
+            >
+              <option value="">No term selected</option>
+              {terms.filter((term) => term.department_id === departmentId).map((term) => (
+                <option key={term.id} value={term.id}>{term.name}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 mt-1">Used for the calendar export's date range and the PDF's session date.</p>
+          </div>
+        )}
 
         <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
           <label className="block text-sm font-medium text-gray-700 mb-2">Generate timetable for</label>
@@ -232,7 +273,7 @@ export function GenerateButton() {
               </option>
             ))}
           </select>
-          <p className="text-xs text-gray-500 mt-1">Each option is generated by CP-SAT and differs from earlier solutions.</p>
+          <p className="text-xs text-gray-500 mt-1">We'll prepare a few timetables so you can pick the one you like.</p>
         </div>
 
         {error && (
@@ -261,20 +302,18 @@ export function GenerateButton() {
         </button>
       </div>
 
-      {currentRun && (
+      {currentRun && currentRun.status !== 'completed' && (
         <div className="mt-6 bg-white rounded-lg border border-gray-200 p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold">Run Status</h3>
+            <h3 className="text-lg font-semibold">Status</h3>
             {getStatusIcon(currentRun.status)}
           </div>
-          
+
           <div className="space-y-3">
             <div>
               <span className="text-sm font-medium text-gray-700">Status:</span>
               <span className={`ml-2 text-sm font-medium ${
-                currentRun.status === 'completed' ? 'text-green-600' :
-                currentRun.status === 'failed' ? 'text-red-600' :
-                'text-blue-600'
+                currentRun.status === 'failed' ? 'text-red-600' : 'text-blue-600'
               }`}>
                 {currentRun.status}
               </span>
@@ -285,30 +324,14 @@ export function GenerateButton() {
                 {new Date(currentRun.created_at).toLocaleString()}
               </span>
             </div>
-            {currentRun.completed_at && (
-              <div>
-                <span className="text-sm font-medium text-gray-700">Completed:</span>
-                <span className="ml-2 text-sm text-gray-600">
-                  {new Date(currentRun.completed_at).toLocaleString()}
-                </span>
-              </div>
-            )}
           </div>
-
-          {currentRun.status === 'completed' && (
-            <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
-              <p className="text-sm text-green-700">
-                Timetable generated successfully! {currentRun.solver_output?.alternatives?.length || 1} timetable option(s) are available in the Timetable Runs page. Open a run, choose an alternative, and click “Use this alternative” to create a version.
-              </p>
-            </div>
-          )}
 
           {currentRun.status === 'failed' && currentRun.llm_explanation && (
             <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
               <h4 className="font-medium text-red-800 mb-2">Why generation failed:</h4>
               <p className="text-sm text-red-700 whitespace-pre-wrap">{currentRun.llm_explanation}</p>
               <p className="text-xs text-red-700 mt-3">
-                Fix the listed data in Setup Wizard, then generate again. Lab subjects need batches, and every class needs an eligible teacher and room with enough capacity.
+                Fix the listed data in Setup, then generate again. Lab subjects need batches, and every class needs an eligible teacher and room with enough capacity.
               </p>
             </div>
           )}

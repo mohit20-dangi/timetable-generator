@@ -89,14 +89,31 @@ def preflight_checks(problem: ProblemData) -> List[DiagnosticIssue]:
         teacher_pool = set()
         for d in batch_demands:
             teacher_pool.update(d.eligible_teacher_ids)
-        if num_batches > 1 and len(teacher_pool) < num_batches:
+        # Phase 2.9: "sequential" and "merged" are explicit hard modes that
+        # PROVABLY never need a different teacher per batch - sequential
+        # because sibling batches are never at the same time (same teacher
+        # can cover all of them, one after another), merged because they
+        # deliberately share one teacher by construction. "independent"
+        # keeps the old conservative assumption (the solver is still free
+        # to schedule them in parallel, so warn early) and "parallel" of
+        # course needs one teacher per simultaneous batch.
+        mode = batch_demands[0].batch_mode
+        needs_distinct_teachers = mode in ("independent", "parallel")
+        required_teachers = num_batches if needs_distinct_teachers else 1
+        if num_batches > 1 and len(teacher_pool) < required_teachers:
             issues.append(DiagnosticIssue(
                 f"insufficient_lab_teachers:{subject_id}:{section_id}", "blocking",
                 f"{batch_demands[0].subject_name} splits into {num_batches} simultaneous lab "
                 f"batches for section {section_id}, but only {len(teacher_pool)} teacher(s) are "
                 f"qualified to teach it.",
-                f"Qualify at least {num_batches} teachers for this subject, since all batches run "
-                "in the same week and may need to run in parallel.",
+                (
+                    f"Qualify at least {required_teachers} teacher(s) for this subject"
+                    + (
+                        ", since all batches run in the same week and may need to run in parallel."
+                        if needs_distinct_teachers
+                        else "."
+                    )
+                ),
             ))
 
     # ---- resource-capacity arithmetic: a teacher who is the ONLY option

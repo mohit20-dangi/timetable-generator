@@ -1,21 +1,35 @@
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Calendar, Settings, ChevronLeft, ChevronRight, LogOut, User, Menu } from 'lucide-react';
-import { useState } from 'react';
+import { LayoutDashboard, Calendar, Settings, ChevronLeft, ChevronRight, LogOut, User, Menu, ListChecks, SlidersHorizontal } from 'lucide-react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { institutionsApi } from '../api/client';
 
 export function Layout() {
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const { user, logout } = useAuth();
+  const [productName, setProductName] = useState('Timetable Generator');
+
+  useEffect(() => {
+    institutionsApi.list().then((res) => {
+      if (res.data[0]?.name) setProductName(`${res.data[0].name} Timetable`);
+    }).catch(() => {});
+  }, []);
 
   const adminNavItems = [
-    { path: '/', label: 'Setup Wizard', icon: Settings },
-    { path: '/runs', label: 'Timetable Runs', icon: Calendar },
+    { path: '/', label: 'Dashboard', icon: LayoutDashboard },
+    { path: '/setup', label: 'Setup', icon: ListChecks },
+    { path: '/scheduling-rules', label: 'Scheduling Rules', icon: SlidersHorizontal },
+    { path: '/runs', label: 'Timetables', icon: Calendar },
+    { path: '/settings', label: 'Settings', icon: Settings },
+  ];
+  const hodNavItems = [
+    { path: '/runs', label: 'Timetables', icon: Calendar },
   ];
   const otherNavItems = [
     { path: '/my-timetable', label: 'My Timetable', icon: LayoutDashboard },
   ];
-  const navItems = user?.role === 'ADMIN' ? adminNavItems : otherNavItems;
+  const navItems = user?.role === 'ADMIN' ? adminNavItems : user?.role === 'HOD' ? hodNavItems : otherNavItems;
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
@@ -24,7 +38,7 @@ export function Layout() {
         <div className="flex flex-col h-full">
           {/* Header */}
           <div className="flex items-center justify-between h-16 px-4 border-b border-gray-200">
-            <h1 className="text-xl font-bold text-blue-600">SGSITS Timetable</h1>
+            <h1 className="text-xl font-bold text-blue-600 truncate">{productName}</h1>
             <button 
               onClick={() => setSidebarOpen(!sidebarOpen)}
               className="lg:hidden p-2 rounded-md text-gray-500 hover:text-gray-700 hover:bg-gray-100"

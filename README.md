@@ -115,7 +115,9 @@ scheduling), generates a timetable, validates it, and publishes it.
 
 ## AI-assisted features (optional)
 
-Set `ANTHROPIC_API_KEY` in `backend/.env` to enable:
+Set `LLM_API_KEY` (plus `LLM_BASE_URL` and `LLM_MODEL` for your provider - OpenRouter,
+OpenAI, NVIDIA NIM, a local Ollama server, or any other OpenAI-compatible endpoint) in
+`backend/.env` to enable:
 
 - **Natural-language constraint parsing** (Constraints step): describe priorities in plain English;
   the AI maps them onto the same rule catalog the UI uses, grounded in your institution's real
@@ -174,7 +176,7 @@ backend/app/
                    validator.py (independent of model_builder by design), diagnostics.py, weights.py,
                    data_loader.py (the only file that touches both ORM and solver types)
   services/        schedule_validator.py (independent post-hoc DB check), exporters.py, ai_agent.py
-  llm/             Claude client for NL constraint parsing / infeasibility explanations
+  llm/             OpenAI-compatible LLM client for NL constraint parsing / infeasibility explanations
   auth/            JWT auth, bcrypt hashing, role-based dependencies
 frontend/src/
   pages/           Route-level views (SetupWizard, TimetableViewer, MyTimetable, ...)

@@ -26,7 +26,7 @@ class Reservation(Base):
     resource_id = Column(String, nullable=False)
     day = Column(String, nullable=False)
     period = Column(Integer, nullable=False)
-    source_run_id = Column(Integer, ForeignKey("timetable_runs.id"), nullable=True)
+    source_run_id = Column(Integer, ForeignKey("timetable_runs.id", ondelete="SET NULL"), nullable=True)
     reason = Column(String, nullable=True)
 
     source_run = relationship("TimetableRun", backref="reservations")

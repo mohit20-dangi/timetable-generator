@@ -1,18 +1,25 @@
 import { useState, useEffect } from 'react';
-import { teachersApi, subjectsApi } from '../api/client';
-import { Teacher, Subject } from '../types';
+import { teachersApi, subjectsApi, departmentsApi, constraintsApi } from '../api/client';
+import { Teacher, Subject, Department } from '../types';
 import { useDepartment } from '../context/DepartmentContext';
-import { Plus, Edit, Trash2, Save, X } from 'lucide-react';
+import { Plus, Edit, Trash2, Save, X, AlertTriangle } from 'lucide-react';
+import { DataTable } from './DataTable';
+import { HelpPopover } from './HelpPopover';
+import { DEFAULT_SLOTS, ScheduleSlot } from '../utils/schedule';
+import { validateWindows, validatePreferredWithinAvailability, validateWorkloadCaps } from '../utils/validation';
 
 export function TeacherForm() {
   const { departmentId } = useDepartment();
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [scheduleSlots, setScheduleSlots] = useState<ScheduleSlot[]>(DEFAULT_SLOTS);
   const [showForm, setShowForm] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState<Teacher | null>(null);
   const [formData, setFormData] = useState({
     id: '',
     name: '',
+    initials: '',
     department_id: '',
     max_continuous_classes: 3,
     max_daily_classes: 5,
@@ -23,10 +30,25 @@ export function TeacherForm() {
   });
 
   const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const [error, setError] = useState('');
+
+  const availabilityIssues = validateWindows(formData.availability, scheduleSlots);
+  const preferredFlat = formData.preferred_slots.flatMap((d) => d.slots.map((s) => ({ day: d.day, start: s.start, end: s.end })));
+  const preferredIssues = [
+    ...validateWindows(preferredFlat, scheduleSlots),
+    ...validatePreferredWithinAvailability(preferredFlat, formData.availability, formData.name || 'This teacher'),
+  ];
+  const workloadIssues = validateWorkloadCaps(
+    { maxDailyClasses: formData.max_daily_classes, maxContinuousClasses: formData.max_continuous_classes },
+    scheduleSlots,
+  );
+  const blockingIssues = [...availabilityIssues, ...preferredIssues].filter((i) => i.severity === 'error');
 
   useEffect(() => {
     fetchTeachers();
     fetchSubjects();
+    departmentsApi.list().then((res) => setDepartments(res.data)).catch(() => setDepartments([]));
+    constraintsApi.listTimeSlots().then((res) => setScheduleSlots(res.data.length ? res.data : DEFAULT_SLOTS)).catch(() => {});
   }, []);
 
   const fetchTeachers = async () => {
@@ -49,10 +71,14 @@ export function TeacherForm() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
+    if (blockingIssues.length > 0) {
+      setError(blockingIssues[0].message);
+      return;
+    }
     try {
       if (editingTeacher) {
-        const { subjects: _subjects, ...teacherUpdate } = formData;
-        await teachersApi.update(editingTeacher.id, teacherUpdate);
+        await teachersApi.update(editingTeacher.id, formData);
       } else {
         await teachersApi.create(formData);
       }
@@ -60,25 +86,26 @@ export function TeacherForm() {
       setEditingTeacher(null);
       resetForm();
       fetchTeachers();
-    } catch (error) {
-      console.error('Failed to save teacher:', error);
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'Could not save this teacher.');
     }
   };
 
   const resetForm = () => {
     setFormData({
-      id: '', name: '', department_id: departmentId || '',
+      id: '', name: '', initials: '', department_id: departmentId || '',
       max_continuous_classes: 3, max_daily_classes: 5,
       availability: [], preferred_slots: [],
       is_guest_from_other_dept: false, subjects: []
     });
   };
 
-  const handleEdit = (teacher: Teacher) => {
+  const handleEdit = async (teacher: Teacher) => {
     setEditingTeacher(teacher);
     setFormData({
       id: teacher.id,
       name: teacher.name,
+      initials: teacher.initials || '',
       department_id: teacher.department_id || '',
       max_continuous_classes: teacher.max_continuous_classes,
       max_daily_classes: teacher.max_daily_classes,
@@ -88,6 +115,12 @@ export function TeacherForm() {
       subjects: []
     });
     setShowForm(true);
+    try {
+      const response = await teachersApi.getSubjects(teacher.id);
+      setFormData((current) => ({ ...current, subjects: response.data }));
+    } catch (error) {
+      console.error('Failed to load this teacher\'s subjects:', error);
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -134,6 +167,9 @@ export function TeacherForm() {
     }
   };
 
+  const selectAllSubjects = () => setFormData({ ...formData, subjects: subjects.map((s) => s.id) });
+  const clearAllSubjects = () => setFormData({ ...formData, subjects: [] });
+
   return (
     <div>
       <div className="flex justify-between items-center mb-4">
@@ -151,10 +187,12 @@ export function TeacherForm() {
         </button>
       </div>
 
+      {error && <p className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">{error}</p>}
+
       {showForm && (
         <div className="mb-6 p-4 border border-gray-200 rounded-lg bg-gray-50">
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Teacher ID</label>
                 <input
@@ -164,6 +202,7 @@ export function TeacherForm() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   placeholder="e.g., t1"
                   required
+                  disabled={!!editingTeacher}
                 />
               </div>
               <div>
@@ -178,13 +217,25 @@ export function TeacherForm() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Department</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Printed initials (for exports)</label>
                 <input
                   type="text"
+                  value={formData.initials}
+                  onChange={(e) => setFormData({ ...formData, initials: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Derived from name if left blank"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Department</label>
+                <select
                   value={formData.department_id}
                   onChange={(e) => setFormData({ ...formData, department_id: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+                >
+                  <option value="">Select department</option>
+                  {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
               </div>
             </div>
 
@@ -198,6 +249,7 @@ export function TeacherForm() {
                   onChange={(e) => setFormData({ ...formData, max_continuous_classes: Number(e.target.value) || 0 })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
+                <div className="mt-1"><HelpPopover>The longest run of back-to-back periods this teacher will be scheduled for on one day, before a gap is required.</HelpPopover></div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Max Daily Classes</label>
@@ -208,6 +260,7 @@ export function TeacherForm() {
                   onChange={(e) => setFormData({ ...formData, max_daily_classes: Number(e.target.value) || 0 })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
+                <div className="mt-1"><HelpPopover>The most periods this teacher will be scheduled for in a single day, regardless of subject.</HelpPopover></div>
               </div>
               <div className="flex items-end">
                 <label className="flex items-center gap-2">
@@ -221,11 +274,16 @@ export function TeacherForm() {
                 </label>
               </div>
             </div>
+            {workloadIssues.length > 0 && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 space-y-1">
+                {workloadIssues.map((issue, i) => <p key={i} className="flex items-center gap-2"><AlertTriangle size={14} /> {issue.message}</p>)}
+              </div>
+            )}
 
             {/* Availability */}
             <div>
               <div className="flex items-center justify-between mb-2">
-                <label className="block text-sm font-medium text-gray-700">Availability</label>
+                <label className="block text-sm font-medium text-gray-700">When can they teach?</label>
                 <button
                   type="button"
                   onClick={addAvailabilitySlot}
@@ -267,11 +325,16 @@ export function TeacherForm() {
                   </button>
                 </div>
               ))}
+              {availabilityIssues.map((issue, i) => (
+                <p key={i} className={`text-xs mt-1 flex items-center gap-1 ${issue.severity === 'error' ? 'text-red-600' : 'text-amber-600'}`}>
+                  <AlertTriangle size={12} /> {issue.message}
+                </p>
+              ))}
             </div>
 
             {/* Preferred Time Slots (Multiple Intervals) */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Preferred Teaching Times</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">When do they prefer to teach?</label>
               <p className="text-sm text-gray-500 mb-2">
                 Define time ranges when the teacher prefers to teach (can have multiple intervals per day)
               </p>
@@ -305,7 +368,7 @@ export function TeacherForm() {
                         <Trash2 size={16} />
                       </button>
                     </div>
-                    
+
                     <div className="space-y-2">
                       {daySlot.slots.map((slot, slotIndex) => (
                         <div key={slotIndex} className="flex items-center gap-2 mb-2 p-2 bg-gray-50 rounded">
@@ -382,12 +445,27 @@ export function TeacherForm() {
                 >
                   + Add Day
                 </button>
+                {preferredIssues.map((issue, i) => (
+                  <p key={i} className={`text-xs flex items-center gap-1 ${issue.severity === 'error' ? 'text-red-600' : 'text-amber-600'}`}>
+                    <AlertTriangle size={12} /> {issue.message}
+                  </p>
+                ))}
               </div>
             </div>
 
             {/* Subjects */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Subjects this teacher can teach</label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-gray-700">Subjects this teacher can teach</label>
+                <div className="flex gap-3">
+                  <button type="button" onClick={selectAllSubjects} className="text-sm text-blue-600 hover:text-blue-800">
+                    Select all
+                  </button>
+                  <button type="button" onClick={clearAllSubjects} className="text-sm text-gray-500 hover:text-gray-700">
+                    Clear all
+                  </button>
+                </div>
+              </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                 {subjects.map((subject) => (
                   <button
@@ -410,7 +488,9 @@ export function TeacherForm() {
             <div className="flex gap-2">
               <button
                 type="submit"
-                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                disabled={blockingIssues.length > 0}
+                title={blockingIssues.length > 0 ? blockingIssues[0].message : undefined}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 <Save size={20} />
                 {editingTeacher ? 'Update' : 'Save'}
@@ -431,51 +511,29 @@ export function TeacherForm() {
         </div>
       )}
 
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="bg-gray-100">
-              <th className="text-left px-4 py-2 font-medium text-gray-700">ID</th>
-              <th className="text-left px-4 py-2 font-medium text-gray-700">Name</th>
-              <th className="text-left px-4 py-2 font-medium text-gray-700">Department</th>
-              <th className="text-left px-4 py-2 font-medium text-gray-700">Max Daily</th>
-              <th className="text-left px-4 py-2 font-medium text-gray-700">Guest</th>
-              <th className="text-right px-4 py-2 font-medium text-gray-700">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {teachers.map((teacher) => (
-              <tr key={teacher.id} className="border-b border-gray-200">
-                <td className="px-4 py-2">{teacher.id}</td>
-                <td className="px-4 py-2">{teacher.name}</td>
-                <td className="px-4 py-2">{teacher.department_id || '-'}</td>
-                <td className="px-4 py-2">{teacher.max_daily_classes}</td>
-                <td className="px-4 py-2">{teacher.is_guest_from_other_dept ? 'Yes' : 'No'}</td>
-                <td className="px-4 py-2 text-right">
-                  <button
-                    onClick={() => handleEdit(teacher)}
-                    className="p-1 text-blue-600 hover:bg-blue-100 rounded"
-                  >
-                    <Edit size={16} />
-                  </button>
-                  <button
-                    onClick={() => handleDelete(teacher.id)}
-                    className="p-1 text-red-600 hover:bg-red-100 rounded"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {teachers.length === 0 && (
-        <div className="text-center py-8 text-gray-500">
-          No teachers defined yet. Click "Add Teacher" to get started.
-        </div>
-      )}
+      <DataTable
+        storageKey="teachers"
+        rows={teachers}
+        getRowId={(t) => t.id}
+        emptyMessage='No teachers defined yet. Click "Add Teacher" to get started.'
+        searchPlaceholder="Search teachers"
+        columns={[
+          { key: 'id', header: 'ID', render: (t) => t.id },
+          { key: 'name', header: 'Name', render: (t) => t.name },
+          { key: 'initials', header: 'Initials', render: (t) => t.initials || '-', defaultVisible: false },
+          { key: 'department', header: 'Department', render: (t) => departments.find((d) => d.id === t.department_id)?.name || t.department_id || '-' },
+          { key: 'weekly', header: 'Weekly Hours', render: (t) => String(t.max_weekly_hours), defaultVisible: false },
+          { key: 'daily', header: 'Max Daily', render: (t) => String(t.max_daily_classes) },
+          { key: 'availability', header: 'Availability', render: (t) => `${(t.availability || []).length} window(s)`, defaultVisible: false },
+          { key: 'guest', header: 'Guest', render: (t) => (t.is_guest_from_other_dept ? 'Yes' : 'No') },
+        ]}
+        actions={(teacher) => (
+          <>
+            <button onClick={() => handleEdit(teacher)} className="p-1 text-blue-600 hover:bg-blue-100 rounded"><Edit size={16} /></button>
+            <button onClick={() => handleDelete(teacher.id)} className="p-1 text-red-600 hover:bg-red-100 rounded"><Trash2 size={16} /></button>
+          </>
+        )}
+      />
     </div>
   );
 }

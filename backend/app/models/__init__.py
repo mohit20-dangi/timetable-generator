@@ -6,6 +6,8 @@ from app.models.section import Section
 from app.models.lab_batch import LabBatch
 from app.models.elective_group import ElectiveGroup
 from app.models.subject import Subject
+from app.models.subject_type import SubjectType
+from app.models.equipment import Equipment
 from app.models.teacher import Teacher
 from app.models.room import Room
 from app.models.teacher_subject import TeacherSubject
@@ -29,6 +31,8 @@ __all__ = [
     "LabBatch",
     "ElectiveGroup",
     "Subject",
+    "SubjectType",
+    "Equipment",
     "Teacher",
     "Room",
     "TeacherSubject",

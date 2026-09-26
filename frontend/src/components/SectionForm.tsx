@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { yearsApi, sectionsApi } from '../api/client';
 import { AcademicYear, Section } from '../types';
 import { Plus, Edit, Trash2, Save, X } from 'lucide-react';
+import { DataTable } from './DataTable';
 
 export function SectionForm() {
   const [years, setYears] = useState<AcademicYear[]>([]);
@@ -167,49 +168,28 @@ export function SectionForm() {
         </div>
       )}
 
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="bg-gray-100">
-              <th className="text-left px-4 py-2 font-medium text-gray-700">ID</th>
-              <th className="text-left px-4 py-2 font-medium text-gray-700">Name</th>
-              <th className="text-left px-4 py-2 font-medium text-gray-700">Year</th>
-              <th className="text-left px-4 py-2 font-medium text-gray-700">Strength</th>
-              <th className="text-right px-4 py-2 font-medium text-gray-700">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sections.map((section) => (
-              <tr key={section.id} className="border-b border-gray-200">
-                <td className="px-4 py-2">{section.id}</td>
-                <td className="px-4 py-2">{section.name}</td>
-                <td className="px-4 py-2">{section.year_id}</td>
-                <td className="px-4 py-2">{section.strength}</td>
-                <td className="px-4 py-2 text-right">
-                  <button
-                    onClick={() => handleEdit(section)}
-                    className="p-1 text-blue-600 hover:bg-blue-100 rounded"
-                  >
-                    <Edit size={16} />
-                  </button>
-                  <button
-                    onClick={() => handleDelete(section.id)}
-                    className="p-1 text-red-600 hover:bg-red-100 rounded"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {sections.length === 0 && (
-        <div className="text-center py-8 text-gray-500">
-          No sections defined yet. Click "Add Section" to get started.
-        </div>
-      )}
+      <DataTable
+        storageKey="sections"
+        rows={sections}
+        getRowId={(s) => s.id}
+        emptyMessage='No sections defined yet. Click "Add Section" to get started.'
+        searchPlaceholder="Search sections"
+        columns={[
+          { key: 'id', header: 'ID', render: (s) => s.id },
+          { key: 'name', header: 'Name', render: (s) => s.name },
+          {
+            key: 'year', header: 'Year',
+            render: (s) => years.find((y) => y.id === s.year_id)?.name || s.year_id,
+          },
+          { key: 'strength', header: 'Strength', render: (s) => String(s.strength) },
+        ]}
+        actions={(section) => (
+          <>
+            <button onClick={() => handleEdit(section)} className="p-1 text-blue-600 hover:bg-blue-100 rounded"><Edit size={16} /></button>
+            <button onClick={() => handleDelete(section.id)} className="p-1 text-red-600 hover:bg-red-100 rounded"><Trash2 size={16} /></button>
+          </>
+        )}
+      />
     </div>
   );
 }

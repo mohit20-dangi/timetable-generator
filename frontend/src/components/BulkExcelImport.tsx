@@ -14,6 +14,7 @@ type PreviewResult = {
   message: string;
   sheets: Record<string, number>;
   total_rows: number;
+  linked_updates: number;
 };
 
 export function BulkExcelImport() {
@@ -90,8 +91,16 @@ export function BulkExcelImport() {
       </div>
 
       <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 mb-6 text-sm text-blue-900">
-        Supported sheets: AcademicYears, Sections, Subjects, Teachers, Rooms, SectionSubjects,
-        TeacherSubjects, LabBatches, Prerequisites, and TimeSlots. You can upload only the sheets you need.
+        <p>
+          Supported sheets: AcademicYears, Sections, Subjects, Teachers, Rooms, SectionSubjects,
+          TeacherSubjects, LabBatches, Prerequisites, and TimeSlots. You can upload only the sheets you need.
+        </p>
+        <p className="mt-2">
+          Fields with several values (a teacher's free periods, a room's equipment, an elective group's
+          subjects, ...) are their own linking sheet - one plain row per value, referencing the parent by id
+          (e.g. TeacherAvailability, RoomEquipment, AcademicYearLunchWindows, ElectiveGroupSubjects).
+          No JSON, just table columns like in every other sheet.
+        </p>
       </div>
 
       <div className="flex flex-wrap gap-3 mb-6">
@@ -135,6 +144,11 @@ export function BulkExcelImport() {
           <p className="font-medium">{preview.message}</p>
           <p className="mt-1">{preview.total_rows} row(s) are ready across {Object.keys(preview.sheets).length} sheet(s).</p>
           <p className="mt-1">Rows: {Object.entries(preview.sheets).map(([name, count]) => `${name} (${count})`).join(', ')}.</p>
+          {preview.linked_updates > 0 && (
+            <p className="mt-1">
+              Plus {preview.linked_updates} linking-sheet update(s) to existing records not otherwise in this workbook.
+            </p>
+          )}
           <button
             type="button"
             onClick={handleConfirmImport}

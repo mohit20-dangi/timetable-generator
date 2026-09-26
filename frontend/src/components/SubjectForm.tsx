@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { subjectsApi, sectionsApi, constraintsApi } from '../api/client';
-import { Subject, Section, DeliveryMode } from '../types';
+import { subjectsApi, subjectTypesApi, equipmentApi, teachersApi } from '../api/client';
+import { Subject, DeliveryMode, BatchSchedulingMode, SubjectType, Equipment, Teacher } from '../types';
 import { useDepartment } from '../context/DepartmentContext';
-import { Plus, Edit, Trash2, Save, X, Link } from 'lucide-react';
+import { Plus, Edit, Trash2, Save, X, AlertTriangle } from 'lucide-react';
+import { DataTable } from './DataTable';
 
 const DELIVERY_MODE_INFO: Record<DeliveryMode, { label: string; hint: string }> = {
   IN_PERSON: { label: 'In-person (needs a teacher + room)', hint: 'Normal classroom teaching - this is what gets scheduled.' },
@@ -11,11 +12,20 @@ const DELIVERY_MODE_INFO: Record<DeliveryMode, { label: string; hint: string }> 
   INDUSTRY: { label: 'Internship / industry', hint: 'Run outside the college - never occupies a timetable slot.' },
 };
 
+const slugify = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
 const DEFAULT_FORM = {
-  id: '', name: '', type: 'theory' as 'theory' | 'lab' | 'tutorial',
+  id: '', name: '', code: '', type: 'theory',
   category: '', delivery_mode: 'IN_PERSON' as DeliveryMode,
-  scheme_hours_per_week: 0, weekly_hours: 0,
-  needs_continuous_block: false, block_size: 1, max_per_day: 1,
+  lecture_hours: 0, tutorial_hours: 0, practical_hours: 0,
+  scheme_hours_per_week: 0,
+  weekly_hours: null as number | null,
+  weekly_hours_override: false,
+  sessions_per_week: null as number | null,
+  periods_per_session: 1,
+  back_to_back: true,
+  batch_scheduling_mode: 'independent' as BatchSchedulingMode,
+  max_per_day: 1,
   requires_room_type: null as string | null,
   requires_equipment: [] as string[],
 };
@@ -23,44 +33,101 @@ const DEFAULT_FORM = {
 export function SubjectForm() {
   const { departmentId } = useDepartment();
   const [subjects, setSubjects] = useState<Subject[]>([]);
-  const [sections, setSections] = useState<Section[]>([]);
-  const [sectionSubjects, setSectionSubjects] = useState<Record<string, string[]>>({});
+  const [subjectTypes, setSubjectTypes] = useState<SubjectType[]>([]);
+  const [equipmentCatalog, setEquipmentCatalog] = useState<Equipment[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingSubject, setEditingSubject] = useState<Subject | null>(null);
   const [formData, setFormData] = useState(DEFAULT_FORM);
+  const [error, setError] = useState('');
+  const [newTypeName, setNewTypeName] = useState('');
+  const [allTeachers, setAllTeachers] = useState<Teacher[]>([]);
+  const [qualifiedTeacherIds, setQualifiedTeacherIds] = useState<string[] | null>(null);
 
   useEffect(() => {
     fetchSubjects();
-    fetchSections();
+    fetchSubjectTypes();
+    fetchEquipment();
+    teachersApi.list().then((res) => setAllTeachers(res.data)).catch(() => setAllTeachers([]));
   }, []);
+
+  // Which teachers can teach the subject currently being edited - the
+  // reverse of a teacher's subject list, so "no one can teach this" is
+  // visible here instead of only surfacing when generation fails (3.7).
+  useEffect(() => {
+    if (!editingSubject) { setQualifiedTeacherIds(null); return; }
+    subjectsApi.getTeachers(editingSubject.id)
+      .then((res) => setQualifiedTeacherIds(res.data))
+      .catch(() => setQualifiedTeacherIds([]));
+  }, [editingSubject]);
 
   const fetchSubjects = async () => {
     try {
       const response = await subjectsApi.list();
       setSubjects(response.data);
-    } catch (error) {
-      console.error('Failed to fetch subjects:', error);
+    } catch (err) {
+      console.error('Failed to fetch subjects:', err);
     }
   };
 
-  const fetchSections = async () => {
+  const fetchSubjectTypes = async () => {
     try {
-      const response = await sectionsApi.list();
-      setSections(response.data);
-      const subjMap: Record<string, string[]> = {};
-      for (const section of response.data) {
-        const ssResponse = await constraintsApi.getSectionSubjects(section.id);
-        subjMap[section.id] = ssResponse.data.map((ss: any) => ss.subject_id);
-      }
-      setSectionSubjects(subjMap);
-    } catch (error) {
-      console.error('Failed to fetch sections:', error);
+      const response = await subjectTypesApi.list();
+      setSubjectTypes(response.data);
+    } catch (err) {
+      console.error('Failed to fetch subject types:', err);
     }
   };
+
+  const fetchEquipment = async () => {
+    try {
+      const response = await equipmentApi.list();
+      setEquipmentCatalog(response.data);
+    } catch (err) {
+      console.error('Failed to fetch equipment:', err);
+    }
+  };
+
+  const addSubjectType = async () => {
+    if (!newTypeName.trim()) return;
+    const id = slugify(newTypeName);
+    try {
+      const response = await subjectTypesApi.create({ id, name: newTypeName.trim(), default_block_size: 1, colour_hex: 'E5E7EB' });
+      setSubjectTypes([...subjectTypes, response.data]);
+      setFormData({ ...formData, type: id });
+      setNewTypeName('');
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'Could not add that subject type.');
+    }
+  };
+
+  const addEquipment = async (name: string) => {
+    const id = slugify(name);
+    if (!id || equipmentCatalog.some((e) => e.id === id)) return id;
+    try {
+      const response = await equipmentApi.create({ id, name: name.trim() });
+      setEquipmentCatalog([...equipmentCatalog, response.data]);
+    } catch (err) {
+      console.error('Failed to add equipment:', err);
+    }
+    return id;
+  };
+
+  const derivedWeeklyHours = formData.delivery_mode === 'IN_PERSON'
+    ? formData.lecture_hours + formData.tutorial_hours + formData.practical_hours
+    : 0;
+  const effectiveWeeklyHours = formData.weekly_hours_override && formData.weekly_hours !== null
+    ? formData.weekly_hours
+    : derivedWeeklyHours;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const payload = { ...formData, department_id: departmentId || null };
+    setError('');
+    const payload = {
+      ...formData,
+      department_id: departmentId || null,
+      weekly_hours: formData.weekly_hours_override ? formData.weekly_hours : null,
+    };
+    delete (payload as any).weekly_hours_override;
     try {
       if (editingSubject) {
         await subjectsApi.update(editingSubject.id, payload);
@@ -71,26 +138,36 @@ export function SubjectForm() {
       setEditingSubject(null);
       setFormData(DEFAULT_FORM);
       fetchSubjects();
-    } catch (error) {
-      console.error('Failed to save subject:', error);
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'Could not save the subject.');
     }
   };
 
   const handleEdit = (subject: Subject) => {
     setEditingSubject(subject);
+    const derived = subject.delivery_mode === 'IN_PERSON'
+      ? subject.lecture_hours + subject.tutorial_hours + subject.practical_hours
+      : 0;
     setFormData({
       id: subject.id,
       name: subject.name,
-      type: subject.type as 'theory' | 'lab' | 'tutorial',
+      code: subject.code || '',
+      type: subject.type,
       category: subject.category || '',
       delivery_mode: subject.delivery_mode || 'IN_PERSON',
+      lecture_hours: subject.lecture_hours || 0,
+      tutorial_hours: subject.tutorial_hours || 0,
+      practical_hours: subject.practical_hours || 0,
       scheme_hours_per_week: subject.scheme_hours_per_week || 0,
       weekly_hours: subject.weekly_hours,
-      needs_continuous_block: subject.needs_continuous_block,
-      block_size: subject.block_size,
+      weekly_hours_override: subject.weekly_hours !== derived,
+      sessions_per_week: subject.sessions_per_week,
+      periods_per_session: subject.periods_per_session,
+      back_to_back: subject.back_to_back,
+      batch_scheduling_mode: subject.batch_scheduling_mode,
       max_per_day: subject.max_per_day || 1,
       requires_room_type: subject.requires_room_type,
-      requires_equipment: subject.requires_equipment || []
+      requires_equipment: subject.requires_equipment || [],
     });
     setShowForm(true);
   };
@@ -100,35 +177,21 @@ export function SubjectForm() {
       try {
         await subjectsApi.delete(id);
         fetchSubjects();
-      } catch (error) {
-        console.error('Failed to delete subject:', error);
+      } catch (err) {
+        console.error('Failed to delete subject:', err);
       }
-    }
-  };
-
-  const toggleSectionSubject = async (sectionId: string, subjectId: string) => {
-    try {
-      const current = sectionSubjects[sectionId] || [];
-      if (current.includes(subjectId)) {
-        await constraintsApi.removeSectionSubject(sectionId, subjectId);
-        setSectionSubjects({ ...sectionSubjects, [sectionId]: current.filter(id => id !== subjectId) });
-      } else {
-        await constraintsApi.addSectionSubject({ section_id: sectionId, subject_id: subjectId });
-        setSectionSubjects({ ...sectionSubjects, [sectionId]: [...current, subjectId] });
-      }
-    } catch (error) {
-      console.error('Failed to toggle section-subject:', error);
     }
   };
 
   const isSchedulable = formData.delivery_mode === 'IN_PERSON';
+  const typeName = (id: string) => subjectTypes.find((t) => t.id === id)?.name || id;
 
   return (
     <div>
       <div className="flex justify-between items-center mb-4">
         <h3 className="text-lg font-semibold">Subjects</h3>
         <button
-          onClick={() => { setShowForm(true); setEditingSubject(null); setFormData(DEFAULT_FORM); }}
+          onClick={() => { setShowForm(true); setEditingSubject(null); setFormData(DEFAULT_FORM); setError(''); }}
           className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
         >
           <Plus size={20} />
@@ -136,8 +199,21 @@ export function SubjectForm() {
         </button>
       </div>
 
+      {error && <p className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">{error}</p>}
+
       {showForm && (
         <div className="mb-6 p-4 border border-gray-200 rounded-lg bg-gray-50">
+          {editingSubject && qualifiedTeacherIds !== null && (
+            qualifiedTeacherIds.length === 0 ? (
+              <div className="mb-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                <AlertTriangle size={16} /> No teacher is qualified to teach this subject yet - it can't be scheduled until one is.
+              </div>
+            ) : (
+              <p className="mb-4 text-sm text-gray-600">
+                Can be taught by: {qualifiedTeacherIds.map((id) => allTeachers.find((t) => t.id === id)?.name || id).join(', ')}
+              </p>
+            )
+          )}
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -157,19 +233,29 @@ export function SubjectForm() {
                 />
               </div>
               <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Printed code (for exports)</label>
+                <input
+                  type="text" value={formData.code} onChange={(e) => setFormData({ ...formData, code: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder={`Defaults to "${formData.id.toUpperCase() || 'SUBJECT ID'}"`}
+                />
+              </div>
+              <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
                 <select
-                  value={formData.type} onChange={(e) => setFormData({ ...formData, type: e.target.value as any })}
+                  value={formData.type} onChange={(e) => setFormData({ ...formData, type: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
-                  <option value="theory">Theory (lecture)</option>
-                  <option value="lab">Lab / Practical</option>
-                  <option value="tutorial">Tutorial</option>
+                  {subjectTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
-                <p className="text-xs text-gray-500 mt-1">
-                  A curriculum row with both lecture and tutorial hours (e.g. L=3, T=1) should be
-                  entered as two separate subjects, one theory and one tutorial.
-                </p>
+                <div className="flex gap-2 mt-1">
+                  <input
+                    type="text" value={newTypeName} onChange={(e) => setNewTypeName(e.target.value)}
+                    placeholder="Add a new type (e.g. Seminar)"
+                    className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded"
+                  />
+                  <button type="button" onClick={addSubjectType} className="px-2 py-1 text-sm text-blue-700 bg-blue-50 hover:bg-blue-100 rounded">Add</button>
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Scheme category (optional)</label>
@@ -195,6 +281,31 @@ export function SubjectForm() {
               <p className="text-xs text-gray-500 mt-1">{DELIVERY_MODE_INFO[formData.delivery_mode].hint}</p>
             </div>
 
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Hours per week, as printed in the scheme (L-T-P)</label>
+              <div className="grid grid-cols-3 gap-3">
+                <label className="text-xs text-gray-600">Lecture (L)
+                  <input type="number" min="0" value={formData.lecture_hours}
+                    onChange={(e) => setFormData({ ...formData, lecture_hours: parseInt(e.target.value) || 0 })}
+                    className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg" />
+                </label>
+                <label className="text-xs text-gray-600">Tutorial (T)
+                  <input type="number" min="0" value={formData.tutorial_hours}
+                    onChange={(e) => setFormData({ ...formData, tutorial_hours: parseInt(e.target.value) || 0 })}
+                    className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg" />
+                </label>
+                <label className="text-xs text-gray-600">Practical (P)
+                  <input type="number" min="0" value={formData.practical_hours}
+                    onChange={(e) => setFormData({ ...formData, practical_hours: parseInt(e.target.value) || 0 })}
+                    className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg" />
+                </label>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">
+                A curriculum row with both lecture and tutorial hours should be entered as two separate
+                subjects (one theory, one tutorial) - put each row's own hours here.
+              </p>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Scheme hours/week</label>
@@ -209,14 +320,22 @@ export function SubjectForm() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   {isSchedulable ? 'Contact hours/week (scheduled)' : 'Contact hours/week (N/A)'}
                 </label>
-                <input
-                  type="number" min="0" value={formData.weekly_hours} disabled={!isSchedulable}
-                  onChange={(e) => setFormData({ ...formData, weekly_hours: parseInt(e.target.value) || 0 })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  {isSchedulable ? 'This many hours actually need a teacher + room this week.' : 'Not scheduled - leave at 0.'}
-                </p>
+                {formData.weekly_hours_override ? (
+                  <input
+                    type="number" min="0" value={formData.weekly_hours ?? 0} disabled={!isSchedulable}
+                    onChange={(e) => setFormData({ ...formData, weekly_hours: parseInt(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg disabled:bg-gray-100"
+                  />
+                ) : (
+                  <input type="number" value={effectiveWeeklyHours} disabled className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100" />
+                )}
+                <button
+                  type="button"
+                  onClick={() => setFormData({ ...formData, weekly_hours_override: !formData.weekly_hours_override, weekly_hours: formData.weekly_hours ?? derivedWeeklyHours })}
+                  className="text-xs text-blue-600 hover:underline mt-1"
+                >
+                  {formData.weekly_hours_override ? 'Use derived L+T+P value instead' : 'Override this value'}
+                </button>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Max times per day</label>
@@ -228,22 +347,25 @@ export function SubjectForm() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox" id="needs_continuous_block" checked={formData.needs_continuous_block}
-                  onChange={(e) => setFormData({ ...formData, needs_continuous_block: e.target.checked })}
-                  className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                />
-                <label htmlFor="needs_continuous_block" className="text-sm font-medium text-gray-700">Needs a continuous block (e.g. a 2-hour lab)</label>
-              </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Block size (periods)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Sessions per week</label>
                 <input
-                  type="number" min="1" value={formData.block_size}
-                  onChange={(e) => setFormData({ ...formData, block_size: parseInt(e.target.value) || 1 })}
+                  type="number" min="0" value={formData.sessions_per_week ?? ''}
+                  placeholder="auto"
+                  onChange={(e) => setFormData({ ...formData, sessions_per_week: e.target.value === '' ? null : parseInt(e.target.value) })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
+                <p className="text-xs text-gray-500 mt-1">How many times it meets. Leave blank to derive from contact hours.</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Periods per session</label>
+                <input
+                  type="number" min="1" value={formData.periods_per_session}
+                  onChange={(e) => setFormData({ ...formData, periods_per_session: parseInt(e.target.value) || 1 })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <p className="text-xs text-gray-500 mt-1">1 for theory, 2-3 for a lab.</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Required Room Type</label>
@@ -258,13 +380,77 @@ export function SubjectForm() {
                   <option value="seminar">Seminar Hall</option>
                 </select>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Required Equipment (comma-separated)</label>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="flex items-center gap-2">
                 <input
-                  type="text" value={formData.requires_equipment.join(', ')}
-                  onChange={(e) => setFormData({ ...formData, requires_equipment: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="e.g., computers, projector"
+                  type="checkbox" id="back_to_back" checked={formData.back_to_back}
+                  onChange={(e) => setFormData({ ...formData, back_to_back: e.target.checked })}
+                  className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                />
+                <label htmlFor="back_to_back" className="text-sm font-medium text-gray-700">
+                  Periods must be back-to-back (e.g. a 2-hour lab block)
+                </label>
+              </div>
+            </div>
+
+            <div>
+              <label htmlFor="batch_scheduling_mode" className="block text-sm font-medium text-gray-700 mb-1">
+                Lab batches scheduling
+              </label>
+              <select
+                id="batch_scheduling_mode" value={formData.batch_scheduling_mode}
+                onChange={(e) => setFormData({ ...formData, batch_scheduling_mode: e.target.value as typeof formData.batch_scheduling_mode })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="independent">Independent - no rule between batches (only a soft nudge)</option>
+                <option value="parallel">Parallel - same time slot, separate rooms (and usually teachers)</option>
+                <option value="sequential">Sequential - never at the same time</option>
+                <option value="merged">Merged - same time, same room, same teacher (one combined class)</option>
+              </select>
+              <p className="text-xs text-gray-500 mt-1">
+                {formData.batch_scheduling_mode === 'independent' && 'The solver decides freely; the "prefer lab batches in parallel" constraint weight (if set) still nudges them toward the same slot.'}
+                {formData.batch_scheduling_mode === 'parallel' && 'Every batch’s session is forced into the same start slot, each in its own room. Needs one suitable room per batch, free at the same hour.'}
+                {formData.batch_scheduling_mode === 'sequential' && 'Batches can never overlap in time - useful when they must share one teacher or room that can only handle one batch at a time.'}
+                {formData.batch_scheduling_mode === 'merged' && 'All batches are taught together as one class: same slot, same room, same teacher. Needs one room big enough to seat every batch combined - check the lab batches preflight before generating.'}
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Required Equipment</label>
+              <div className="flex flex-wrap gap-2 mb-2">
+                {equipmentCatalog.map((eq) => {
+                  const selected = formData.requires_equipment.includes(eq.id);
+                  return (
+                    <button
+                      key={eq.id} type="button"
+                      onClick={() => setFormData({
+                        ...formData,
+                        requires_equipment: selected
+                          ? formData.requires_equipment.filter((id) => id !== eq.id)
+                          : [...formData.requires_equipment, eq.id],
+                      })}
+                      className={`px-2 py-1 text-xs rounded-full border ${selected ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300'}`}
+                    >
+                      {eq.name}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text" id="new-equipment" placeholder="Add new equipment (e.g. Projector)"
+                  className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded"
+                  onKeyDown={async (e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const input = e.currentTarget;
+                      const id = await addEquipment(input.value);
+                      if (id) setFormData((prev) => ({ ...prev, requires_equipment: [...prev.requires_equipment, id] }));
+                      input.value = '';
+                    }
+                  }}
                 />
               </div>
             </div>
@@ -286,86 +472,35 @@ export function SubjectForm() {
         </div>
       )}
 
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="bg-gray-100">
-              <th className="text-left px-4 py-2 font-medium text-gray-700">ID</th>
-              <th className="text-left px-4 py-2 font-medium text-gray-700">Name</th>
-              <th className="text-left px-4 py-2 font-medium text-gray-700">Type</th>
-              <th className="text-left px-4 py-2 font-medium text-gray-700">Delivery</th>
-              <th className="text-left px-4 py-2 font-medium text-gray-700">Hours/Week</th>
-              <th className="text-right px-4 py-2 font-medium text-gray-700">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {subjects.map((subject) => (
-              <tr key={subject.id} className="border-b border-gray-200">
-                <td className="px-4 py-2">{subject.id}</td>
-                <td className="px-4 py-2">{subject.name}</td>
-                <td className="px-4 py-2 capitalize">{subject.type}</td>
-                <td className="px-4 py-2 text-sm">
-                  {subject.delivery_mode === 'IN_PERSON'
-                    ? <span className="text-gray-700">Scheduled</span>
-                    : <span className="text-purple-600">{DELIVERY_MODE_INFO[subject.delivery_mode]?.label || subject.delivery_mode}</span>}
-                </td>
-                <td className="px-4 py-2">{subject.delivery_mode === 'IN_PERSON' ? subject.weekly_hours : '-'}</td>
-                <td className="px-4 py-2 text-right">
-                  <button onClick={() => handleEdit(subject)} className="p-1 text-blue-600 hover:bg-blue-100 rounded"><Edit size={16} /></button>
-                  <button onClick={() => handleDelete(subject.id)} className="p-1 text-red-600 hover:bg-red-100 rounded"><Trash2 size={16} /></button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {subjects.length === 0 && (
-        <div className="text-center py-8 text-gray-500">No subjects defined yet. Click "Add Subject" to get started.</div>
-      )}
-
-      {sections.length > 0 && subjects.length > 0 && (
-        <div className="mt-8">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <Link size={20} />
-            Assign Subjects to Sections
-          </h3>
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
-              <thead>
-                <tr className="bg-gray-100">
-                  <th className="text-left px-4 py-2 font-medium text-gray-700">Section</th>
-                  {subjects.map((subject) => (
-                    <th key={subject.id} className="text-center px-2 py-2 font-medium text-gray-700">{subject.id}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {sections.map((section) => (
-                  <tr key={section.id} className="border-b border-gray-200">
-                    <td className="px-4 py-2 font-medium">{section.name}</td>
-                    {subjects.map((subject) => {
-                      const assigned = sectionSubjects[section.id]?.includes(subject.id);
-                      return (
-                        <td key={subject.id} className="text-center px-2 py-2">
-                          <button
-                            onClick={() => toggleSectionSubject(section.id, subject.id)}
-                            className={`w-6 h-6 rounded flex items-center justify-center transition-colors ${
-                              assigned ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
-                            }`}
-                          >
-                            {assigned ? '✓' : '+'}
-                          </button>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+      <DataTable
+        storageKey="subjects"
+        rows={subjects}
+        getRowId={(s) => s.id}
+        emptyMessage='No subjects defined yet. Click "Add Subject" to get started.'
+        searchPlaceholder="Search subjects"
+        columns={[
+          { key: 'id', header: 'ID', render: (s) => s.id },
+          { key: 'name', header: 'Name', render: (s) => s.name },
+          { key: 'code', header: 'Printed code', render: (s) => s.code || '-', defaultVisible: false },
+          { key: 'type', header: 'Type', render: (s) => typeName(s.type) },
+          {
+            key: 'delivery', header: 'Delivery',
+            render: (s) => s.delivery_mode === 'IN_PERSON'
+              ? <span className="text-gray-700">Scheduled</span>
+              : <span className="text-purple-600">{DELIVERY_MODE_INFO[s.delivery_mode]?.label || s.delivery_mode}</span>,
+            searchValue: (s) => DELIVERY_MODE_INFO[s.delivery_mode]?.label || s.delivery_mode,
+          },
+          { key: 'hours', header: 'Hours/Week', render: (s) => (s.delivery_mode === 'IN_PERSON' ? String(s.weekly_hours) : '-') },
+          { key: 'category', header: 'Category', render: (s) => s.category || '-', defaultVisible: false },
+          { key: 'room_type', header: 'Room type', render: (s) => s.requires_room_type || 'Any', defaultVisible: false },
+        ]}
+        actions={(subject) => (
+          <>
+            <button onClick={() => handleEdit(subject)} className="p-1 text-blue-600 hover:bg-blue-100 rounded"><Edit size={16} /></button>
+            <button onClick={() => handleDelete(subject.id)} className="p-1 text-red-600 hover:bg-red-100 rounded"><Trash2 size={16} /></button>
+          </>
+        )}
+      />
     </div>
   );
 }

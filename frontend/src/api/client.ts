@@ -48,6 +48,9 @@ export const authApi = {
   me: () => api.get('/auth/me'),
   register: (data: any) => api.post('/auth/register', data),
   bootstrapAdmin: (data: any) => api.post('/auth/bootstrap-admin', data),
+  listUsers: () => api.get('/auth/users'),
+  setUserActive: (id: number, isActive: boolean) =>
+    api.patch(`/auth/users/${id}/active`, null, { params: { is_active: isActive } }),
 };
 
 export const institutionsApi = {
@@ -74,6 +77,7 @@ export const yearsApi = {
   update: (id: string, data: any) => api.put(`/years/${id}`, data),
   get: (id: string) => api.get(`/years/${id}`),
   delete: (id: string) => api.delete(`/years/${id}`),
+  createRemainingSections: (id: string) => api.post(`/years/${id}/create-remaining-sections`),
 };
 
 export const sectionsApi = {
@@ -90,7 +94,9 @@ export const subjectsApi = {
   create: (data: any) => api.post('/subjects/', data),
   update: (id: string, data: any) => api.put(`/subjects/${id}`, data),
   get: (id: string) => api.get(`/subjects/${id}`),
-  delete: (id: string) => api.delete(`/subjects/${id}`),
+  getTeachers: (id: string) => api.get(`/subjects/${id}/teachers`),
+  getTeacherQualificationsMap: () => api.get('/subjects/teacher-qualifications-map'),
+  delete: (id: string, dryRun = false) => api.delete(`/subjects/${id}`, { params: dryRun ? { dry_run: true } : {} }),
 };
 
 export const teachersApi = {
@@ -100,7 +106,21 @@ export const teachersApi = {
   get: (id: string) => api.get(`/teachers/${id}`),
   addSubject: (teacherId: string, subjectId: string) => api.post(`/teachers/${teacherId}/subjects`, { subject_id: subjectId }),
   removeSubject: (teacherId: string, subjectId: string) => api.delete(`/teachers/${teacherId}/subjects/${subjectId}`),
-  delete: (id: string) => api.delete(`/teachers/${id}`),
+  getSubjects: (teacherId: string) => api.get(`/teachers/${teacherId}/subjects`),
+  delete: (id: string, dryRun = false) => api.delete(`/teachers/${id}`, { params: dryRun ? { dry_run: true } : {} }),
+};
+
+export const subjectTypesApi = {
+  list: () => api.get('/subject-types/'),
+  create: (data: any) => api.post('/subject-types/', data),
+  update: (id: string, data: any) => api.put(`/subject-types/${id}`, data),
+  delete: (id: string) => api.delete(`/subject-types/${id}`),
+};
+
+export const equipmentApi = {
+  list: () => api.get('/equipment/'),
+  create: (data: any) => api.post('/equipment/', data),
+  delete: (id: string) => api.delete(`/equipment/${id}`),
 };
 
 export const roomsApi = {
@@ -113,15 +133,19 @@ export const roomsApi = {
 
 export const constraintsApi = {
   // Section-Subjects
+  getAllSectionSubjects: () => api.get('/constraints/section-subjects'),
   addSectionSubject: (data: any) => api.post('/constraints/section-subjects', data),
   getSectionSubjects: (sectionId: string) => api.get(`/constraints/section-subjects/${sectionId}`),
   removeSectionSubject: (sectionId: string, subjectId: string) => api.delete(`/constraints/section-subjects/${sectionId}/${subjectId}`),
-  
+
   // Lab Batches
   createLabBatch: (data: any) => api.post('/constraints/lab-batches', data),
+  getAllLabBatches: () => api.get('/constraints/lab-batches'),
   getLabBatches: (sectionId: string) => api.get(`/constraints/lab-batches/${sectionId}`),
   deleteLabBatch: (id: string) => api.delete(`/constraints/lab-batches/${id}`),
-  
+  preflightLabBatches: (sectionId: string, subjectId: string) =>
+    api.get(`/constraints/lab-batches/${sectionId}/preflight`, { params: { subject_id: subjectId } }),
+
   // Prerequisites
   addPrerequisite: (data: any) => api.post('/constraints/prerequisites', data),
   listPrerequisites: () => api.get('/constraints/prerequisites'),
@@ -193,20 +217,30 @@ export const timetableApi = {
   getAlternative: (runId: number, rank: number) => api.get(`/timetable/runs/${runId}/alternatives/${rank}`),
   useAlternative: (runId: number, rank: number) => api.post(`/timetable/runs/${runId}/alternatives/${rank}/use`),
   explain: (runId: number) => api.get(`/timetable/runs/${runId}/explain`),
-  export: (runId: number, format: string, view?: string, entityId?: string) =>
+  export: (runId: number, format: string, view?: string, entityId?: string, yearId?: string) =>
     api.get(`/timetable/runs/${runId}/export`, {
-      params: { format, ...(view ? { view } : {}), ...(entityId ? { entity_id: entityId } : {}) },
+      params: {
+        format, ...(view ? { view } : {}), ...(entityId ? { entity_id: entityId } : {}),
+        ...(yearId ? { year_id: yearId } : {}),
+      },
       responseType: 'blob',
     }),
   myTimetable: () => api.get('/timetable/me'),
+  myCalendar: () => api.get('/timetable/me/calendar.ics', { responseType: 'blob' }),
   publish: (runId: number) => api.post(`/timetable/runs/${runId}/publish`),
   getVersions: (runId: number) => api.get(`/timetable/runs/${runId}/versions`),
   compare: (fromRunId: number, toRunId: number) => api.get(`/timetable/runs/${fromRunId}/compare/${toRunId}`),
   editEntry: (runId: number, body: any) => api.post(`/timetable/runs/${runId}/edit`, body),
+  parseMoveNL: (runId: number, body: { text: string; subject_id: string; current_day: string; current_period: number }) =>
+    api.post(`/timetable/runs/${runId}/parse-move-nl`, body),
+  aiPlan: (runId: number, instruction: string) => api.post(`/timetable/runs/${runId}/ai-plan`, { instruction }),
+  aiApply: (runId: number, actions: any[]) => api.post(`/timetable/runs/${runId}/ai-apply`, { actions }),
+  deleteRun: (runId: number) => api.delete(`/timetable/runs/${runId}`),
 };
 
 export const adminDataApi = {
   reset: (scope: string) => api.post(`/admin/data/reset/${scope}`),
+  previewReset: (scope: string) => api.get(`/admin/data/reset/${scope}/preview`),
 };
 
 export default api;

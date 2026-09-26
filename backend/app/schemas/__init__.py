@@ -9,6 +9,9 @@ from app.schemas.elective_group import (
     ElectivePreflightResponse, ElectivePreflightIssue,
 )
 from app.schemas.subject import SubjectCreate, SubjectResponse
+from app.schemas.batch_preflight import BatchPreflightResponse, BatchPreflightIssue
+from app.schemas.subject_type import SubjectTypeCreate, SubjectTypeResponse
+from app.schemas.equipment import EquipmentCreate, EquipmentResponse
 from app.schemas.teacher import TeacherCreate, TeacherResponse
 from app.schemas.teacher_subject import TeacherSubjectCreate
 from app.schemas.room import RoomCreate, RoomResponse
@@ -18,6 +21,10 @@ from app.schemas.constraint_rule import ConstraintRuleCreate, ConstraintRuleResp
 from app.schemas.constraint_profile import ConstraintProfileCreate, ConstraintProfileResponse
 from app.schemas.user import UserCreate, UserResponse, LoginRequest, TokenResponse
 from app.schemas.nl_constraint import NLConstraintParseRequest, NLConstraintParseResponse
+from app.schemas.nl_edit import NLMoveParseRequest, NLMoveParseResponse
+from app.schemas.timetable_ai import (
+    TimetableAIPlanRequest, TimetableAIAction, TimetableAIPlanResponse, TimetableAIApplyRequest,
+)
 from app.schemas.timetable import (
     TimetableGenerateRequest, TimetableRunResponse, EntryIdentifier,
     EditEntryRequest, ConflictDetail, SuggestedSlot, EditEntryResponse,
@@ -49,6 +56,9 @@ __all__ = [
     "ElectiveGroupCreate", "ElectiveGroupResponse",
     "ElectivePreflightResponse", "ElectivePreflightIssue",
     "SubjectCreate", "SubjectResponse",
+    "BatchPreflightResponse", "BatchPreflightIssue",
+    "SubjectTypeCreate", "SubjectTypeResponse",
+    "EquipmentCreate", "EquipmentResponse",
     "TeacherCreate", "TeacherResponse",
     "TeacherSubjectCreate",
     "RoomCreate", "RoomResponse",
@@ -58,6 +68,8 @@ __all__ = [
     "ConstraintProfileCreate", "ConstraintProfileResponse",
     "UserCreate", "UserResponse", "LoginRequest", "TokenResponse",
     "NLConstraintParseRequest", "NLConstraintParseResponse",
+    "NLMoveParseRequest", "NLMoveParseResponse",
+    "TimetableAIPlanRequest", "TimetableAIAction", "TimetableAIPlanResponse", "TimetableAIApplyRequest",
     "TimetableGenerateRequest", "TimetableRunResponse", "EntryIdentifier",
     "EditEntryRequest", "ConflictDetail", "SuggestedSlot", "EditEntryResponse",
     "PublishRequest", "TimetableEntryResponse", "ValidationIssue", "ValidationResponse",

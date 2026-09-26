@@ -68,6 +68,43 @@ def validate_schedule(problem: ProblemData, sessions: List[ScheduledSession]) ->
         (b_first, b_last, b_day) = ranges[b.demand_id]
         return a_day == b_day and a_first <= b_last and b_first <= a_last
 
+    def same_elective_slot(a, b) -> bool:
+        """Elective basket options sharing (elective_group_id,
+        session_index) are REQUIRED to start together (see
+        ELECTIVE_NOT_SYNCHRONISED below) - they must be exempted from the
+        audience-overlap checks rather than flagged as a clash, or every
+        basket with 2+ offered options fails this validator by
+        construction (the model builder has the matching exception in
+        _overlap_intervals_collapsing_electives)."""
+        a_demand = demands_by_id.get(a.demand_id)
+        b_demand = demands_by_id.get(b.demand_id)
+        if not a_demand or not b_demand or not a_demand.elective_group_id:
+            return False
+        return (
+            a_demand.elective_group_id == b_demand.elective_group_id
+            and a_demand.session_index == b_demand.session_index
+        )
+
+    def same_merged_batch_group(a, b) -> bool:
+        """Phase 2.9: lab batches whose subject is in "merged" mode are
+        DELIBERATELY co-scheduled in the same room with the same teacher -
+        model_builder forces that equality (see build_model's merged-batch
+        block). Without this exemption every merged subject would fail
+        this validator by construction, the same trap same_elective_slot
+        above exists to avoid."""
+        a_demand = demands_by_id.get(a.demand_id)
+        b_demand = demands_by_id.get(b.demand_id)
+        if not a_demand or not b_demand:
+            return False
+        if a_demand.audience_type != "batch" or b_demand.audience_type != "batch":
+            return False
+        if a_demand.batch_mode != "merged" or b_demand.batch_mode != "merged":
+            return False
+        return (
+            a_demand.subject_id == b_demand.subject_id
+            and a_demand.parent_section_id == b_demand.parent_section_id
+        )
+
     # ---- no room double-booked ----
     by_room: Dict[str, List[ScheduledSession]] = {}
     for s in sessions:
@@ -75,7 +112,7 @@ def validate_schedule(problem: ProblemData, sessions: List[ScheduledSession]) ->
     for room_id, group in by_room.items():
         for i in range(len(group)):
             for j in range(i + 1, len(group)):
-                if overlaps(group[i], group[j]):
+                if overlaps(group[i], group[j]) and not same_merged_batch_group(group[i], group[j]):
                     violations.append(Violation(
                         "ROOM_CLASH",
                         f"Room {room_id} double-booked: {group[i].demand_id} and {group[j].demand_id}.",
@@ -88,7 +125,7 @@ def validate_schedule(problem: ProblemData, sessions: List[ScheduledSession]) ->
     for teacher_id, group in by_teacher.items():
         for i in range(len(group)):
             for j in range(i + 1, len(group)):
-                if overlaps(group[i], group[j]):
+                if overlaps(group[i], group[j]) and not same_merged_batch_group(group[i], group[j]):
                     violations.append(Violation(
                         "TEACHER_CLASH",
                         f"Teacher {teacher_id} double-booked: {group[i].demand_id} and {group[j].demand_id}.",
@@ -106,7 +143,7 @@ def validate_schedule(problem: ProblemData, sessions: List[ScheduledSession]) ->
     for section_id, group in by_section_level.items():
         for i in range(len(group)):
             for j in range(i + 1, len(group)):
-                if overlaps(group[i], group[j]):
+                if overlaps(group[i], group[j]) and not same_elective_slot(group[i], group[j]):
                     violations.append(Violation(
                         "SECTION_CLASH",
                         f"Section {section_id} double-booked: {group[i].demand_id} and {group[j].demand_id}.",
@@ -116,7 +153,7 @@ def validate_schedule(problem: ProblemData, sessions: List[ScheduledSession]) ->
     for batch_id, group in by_batch.items():
         for i in range(len(group)):
             for j in range(i + 1, len(group)):
-                if overlaps(group[i], group[j]):
+                if overlaps(group[i], group[j]) and not same_elective_slot(group[i], group[j]):
                     violations.append(Violation(
                         "BATCH_CLASH",
                         f"Batch {batch_id} double-booked: {group[i].demand_id} and {group[j].demand_id}.",
@@ -124,7 +161,7 @@ def validate_schedule(problem: ProblemData, sessions: List[ScheduledSession]) ->
         parent_section = batch_to_section.get(batch_id)
         for section_session in by_section_level.get(parent_section, []):
             for batch_session in group:
-                if overlaps(section_session, batch_session):
+                if overlaps(section_session, batch_session) and not same_elective_slot(section_session, batch_session):
                     violations.append(Violation(
                         "BATCH_CLASH",
                         f"Batch {batch_id} clashes with its own section's class "
@@ -171,17 +208,18 @@ def validate_schedule(problem: ProblemData, sessions: List[ScheduledSession]) ->
                 f"Teacher {session.teacher_id} is unavailable during {session.demand_id}'s scheduled time.",
             ))
 
-    # ---- lunch window ----
+    # ---- lunch window (per day - Phase 2.5) ----
     for session in sessions:
         demand = demands_by_id.get(session.demand_id)
         if not demand:
             continue
-        window = problem.lunch_windows.get(demand.parent_section_id)
+        first, last, day = ranges[session.demand_id]
+        day_windows = problem.lunch_windows.get(demand.parent_section_id)
+        window = day_windows.get(day) if day_windows else None
         if not window:
             continue
         lunch_start, lunch_end = window
         start_slot = slots_by_index[session.start_slot_index]
-        first, last, _day = ranges[session.demand_id]
         end_slot = slots_by_index[last]
         if start_slot.start_minutes < lunch_end and lunch_start < end_slot.end_minutes:
             violations.append(Violation(

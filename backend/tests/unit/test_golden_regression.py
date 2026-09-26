@@ -112,3 +112,65 @@ def test_lab_batches_prefer_running_in_parallel_not_serialised():
 
     violations = validate_schedule(problem, results[0].sessions)
     assert violations == []
+
+
+def test_batch_mode_sequential_forces_batches_apart():
+    """Phase 2.9: batch_mode="sequential" is a hard requirement that
+    sibling batches never overlap - the inverse of "parallel". Only one
+    shared room is offered, so the solver has no choice but to place them
+    at different times."""
+    slots = _week_calendar(periods_per_day=4)
+    demands = []
+    for batch in ["b1", "b2"]:
+        demands.append(SessionDemand(
+            id=f"lab:{batch}", subject_id="lab_subj", subject_name="Lab", kind="lab",
+            audience_type="batch", audience_id=batch, parent_section_id="sec1",
+            session_index=0, duration=1, room_type="lab", equipment=[],
+            eligible_room_ids=["L1"], eligible_teacher_ids=["t1", "t2"],
+            valid_start_slot_indices=valid_starts_for_duration(slots, 1), max_per_day=1,
+            batch_mode="sequential",
+        ))
+    problem = ProblemData(
+        slots=slots, rooms={"L1": RoomInfo(id="L1", type="lab", capacity=30)},
+        teachers={"t1": TeacherInfo(id="t1"), "t2": TeacherInfo(id="t2")}, demands=demands,
+    )
+    results = solve_with_alternatives(problem, max_seconds=15, num_workers=4, num_alternatives=1)
+    assert results[0].status in ("OPTIMAL", "FEASIBLE")
+    starts = [s.start_slot_index for s in results[0].sessions]
+    assert len(set(starts)) == 2, f"Sequential batches landed at the same slot: {starts}"
+
+    violations = validate_schedule(problem, results[0].sessions)
+    assert violations == []
+
+
+def test_batch_mode_merged_shares_one_room_and_teacher():
+    """Phase 2.9: batch_mode="merged" forces sibling batches onto the SAME
+    slot, room AND teacher - taught as one combined class - rather than
+    parallel's "same slot, different room". Only one room is offered, big
+    enough for both batches combined, and it should end up used by both."""
+    slots = _week_calendar(periods_per_day=4)
+    demands = []
+    for batch in ["b1", "b2"]:
+        demands.append(SessionDemand(
+            id=f"lab:{batch}", subject_id="lab_subj", subject_name="Lab", kind="lab",
+            audience_type="batch", audience_id=batch, parent_section_id="sec1",
+            session_index=0, duration=1, room_type="lab", equipment=[],
+            eligible_room_ids=["BIG"], eligible_teacher_ids=["t1", "t2"],
+            valid_start_slot_indices=valid_starts_for_duration(slots, 1), max_per_day=1,
+            batch_mode="merged",
+        ))
+    problem = ProblemData(
+        slots=slots, rooms={"BIG": RoomInfo(id="BIG", type="lab", capacity=60)},
+        teachers={"t1": TeacherInfo(id="t1"), "t2": TeacherInfo(id="t2")}, demands=demands,
+    )
+    results = solve_with_alternatives(problem, max_seconds=15, num_workers=4, num_alternatives=1)
+    assert results[0].status in ("OPTIMAL", "FEASIBLE")
+    starts = {s.start_slot_index for s in results[0].sessions}
+    rooms = {s.room_id for s in results[0].sessions}
+    teachers = {s.teacher_id for s in results[0].sessions}
+    assert len(starts) == 1, f"Merged batches didn't share a start slot: {starts}"
+    assert len(rooms) == 1, f"Merged batches didn't share a room: {rooms}"
+    assert len(teachers) == 1, f"Merged batches didn't share a teacher: {teachers}"
+
+    violations = validate_schedule(problem, results[0].sessions)
+    assert violations == []

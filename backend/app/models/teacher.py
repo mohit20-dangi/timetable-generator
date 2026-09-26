@@ -8,6 +8,10 @@ class Teacher(Base):
 
     id = Column(String, primary_key=True, index=True)
     name = Column(String, nullable=False)
+    # Short printed initials for the PDF/Excel exports (e.g. "MCH") -
+    # Phase 4.1. Derived from the name on create when not given explicitly,
+    # but always overridable.
+    initials = Column(String, nullable=True)
     department_id = Column(String, ForeignKey("departments.id"), nullable=True)
     max_continuous_classes = Column(Integer, default=3)
     max_daily_classes = Column(Integer, default=6)

@@ -49,6 +49,17 @@ const LEVEL_OPTIONS: { value: ImportanceLevel; label: string; hint: string }[] =
   { value: 'dont_care', label: "Don't care", hint: 'Ignored entirely.' },
 ];
 
+// Only these two rules can actually be turned into a hard requirement
+// (see backend app/solver/model_builder.py's must_have_rules handling) -
+// "zero gaps" and "batches run together" are real hard constraints when
+// promoted. The rest (fairness, preferences, day balance, edge periods)
+// can't be forced to a strict guarantee without risking an otherwise-
+// solvable timetable becoming infeasible, so "must have" on those stays
+// a very heavy preference instead - the UI must say so honestly rather
+// than promise a hard rule it can't back up.
+const HARD_PROMOTABLE_KEYS = new Set(['minimize_student_gaps', 'parallel_lab_batches']);
+const MUST_HAVE_SOFT_HINT = "Given the highest possible priority, but not a strict guarantee - forcing it could make an otherwise-workable timetable impossible.";
+
 const PRESETS: { id: string; label: string; description: string; levels: Record<string, ImportanceLevel> }[] = [
   {
     id: 'balanced', label: 'Balanced', description: 'A reasonable default for most colleges.',
@@ -190,7 +201,7 @@ export function ConstraintBuilder() {
       )}
 
       <div className="flex justify-between items-center mb-4">
-        <h3 className="text-lg font-semibold">Constraint Profiles</h3>
+        <h3 className="text-lg font-semibold">Scheduling priorities</h3>
         <button
           onClick={() => {
             setShowForm(true);
@@ -326,9 +337,13 @@ export function ConstraintBuilder() {
                     <p className="text-sm font-medium text-gray-900">{rule.label}</p>
                     <p className="text-xs text-gray-500 mb-2">{rule.description}</p>
                     <div className="flex flex-wrap gap-2">
-                      {LEVEL_OPTIONS.map((option) => (
+                      {LEVEL_OPTIONS.map((option) => {
+                        const hint = option.value === 'must_have' && !HARD_PROMOTABLE_KEYS.has(rule.key)
+                          ? MUST_HAVE_SOFT_HINT
+                          : option.hint;
+                        return (
                         <button
-                          key={option.value} type="button" title={option.hint}
+                          key={option.value} type="button" title={hint}
                           onClick={() => setLevels({ ...levels, [rule.key]: option.value })}
                           className={`px-3 py-1.5 text-sm rounded-full border transition-colors ${
                             levels[rule.key] === option.value
@@ -338,7 +353,8 @@ export function ConstraintBuilder() {
                         >
                           {option.label}
                         </button>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
@@ -402,7 +418,7 @@ export function ConstraintBuilder() {
 
       {profiles.length === 0 && (
         <div className="text-center py-8 text-gray-500">
-          No constraint profiles defined yet. Create one to get started.
+          No scheduling priorities defined yet. Create one to get started.
         </div>
       )}
     </div>

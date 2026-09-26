@@ -43,7 +43,9 @@ def test_duration_2_block_cannot_start_where_no_contiguous_run_exists():
 
 def test_lunch_window_excludes_overlapping_starts():
     slots = _slots()
-    # Lunch from 09:30-10:00 overlaps period 1 (09:00-09:50, since 9:00<10:00 and 9:30<9:50)
-    starts = valid_starts_for_duration(slots, 1, lunch_window=(9 * 60 + 30, 10 * 60))
+    # Lunch from 09:30-10:00 overlaps period 1 (09:00-09:50, since 9:00<10:00 and 9:30<9:50).
+    # Per-day (Phase 2.5): Tue carries no lunch window, so its slot is untouched.
+    starts = valid_starts_for_duration(slots, 1, lunch_windows={"Mon": (9 * 60 + 30, 10 * 60)})
     assert 0 not in starts  # Mon P1 overlaps lunch
     assert 2 in starts  # Mon P3 (11:00) does not
+    assert 3 in starts  # Tue P1 has no lunch window at all

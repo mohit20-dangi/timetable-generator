@@ -1,7 +1,7 @@
 from pydantic import BaseModel, EmailStr, model_validator
 from typing import Optional
 
-VALID_ROLES = {"ADMIN", "FACULTY", "STUDENT"}
+VALID_ROLES = {"ADMIN", "HOD", "FACULTY", "STUDENT"}
 
 
 class UserCreate(BaseModel):

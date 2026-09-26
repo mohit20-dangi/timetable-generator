@@ -11,9 +11,19 @@ class ConstraintRule(Base):
     for audit).
 
     rule_type: teacher_unavailable | room_unavailable | section_unavailable
-             | teacher_preferred | max_daily_override | custom
+             | teacher_preferred | max_daily_override | batch_scheduling_mode
+             | custom
     target_type: teacher | room | section | subject
     priority: hard | soft
+
+    batch_scheduling_mode rules (Phase 2.9) target_type="subject" and carry
+    `batch_mode` (independent|parallel|sequential|merged), overriding that
+    Subject's own `batch_scheduling_mode` for lab-batch scheduling. With no
+    day/start_time/end_time window it's a blanket override; with one, the
+    subject's lab-batch sessions are additionally confined to that window
+    (e.g. "the only teacher qualified for this subject is free Tue 10-12,
+    so merge the batches then" - the window explains *why* a mode is being
+    forced, not just *that* it is).
     """
     __tablename__ = "constraint_rules"
 
@@ -27,6 +37,7 @@ class ConstraintRule(Base):
     end_time = Column(Time, nullable=True)
     priority = Column(String, default="hard")  # hard | soft
     weight = Column(Integer, default=0)  # used only when priority == soft
+    batch_mode = Column(String, nullable=True)  # used only when rule_type == batch_scheduling_mode
     description = Column(String, nullable=True)
     source = Column(String, default="manual")  # manual | ai_parsed
     raw_instruction = Column(String, nullable=True)

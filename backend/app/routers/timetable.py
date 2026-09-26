@@ -1,6 +1,6 @@
 import io
-from datetime import datetime
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
@@ -11,25 +11,51 @@ from app.db import get_db
 from app.core.config import settings
 from app.models import (
     TimetableRun, GeneratedEntry, ConstraintProfile, Department, LabBatch,
-    Section, User,
+    Section, TimeSlot, AcademicTerm, AcademicYear, User,
 )
 from app.schemas import (
     TimetableGenerateRequest, TimetableRunResponse, TimetableEntryResponse,
     EditEntryRequest, EditEntryResponse, ConflictDetail, SuggestedSlot,
     ValidationResponse, ValidationIssue, AlternativesResponse, AlternativeSummary,
-    AlternativeDetailResponse,
+    AlternativeDetailResponse, NLMoveParseRequest, NLMoveParseResponse,
+    TimetableAIPlanRequest, TimetableAIPlanResponse, TimetableAIApplyRequest,
 )
-from app.auth.dependencies import get_current_user, require_admin
+from app.auth.dependencies import get_current_user, require_admin, require_admin_or_hod
 from app.solver.data_loader import load_department_problem
 from app.solver.engine import solve_with_alternatives
 from app.solver.calendar import build_slot_calendar
 from app.solver import diagnostics as diag
-from app.solver.weights import resolve_weights
+from app.solver.weights import resolve_weights, is_must_have
+from app.services.timetable_ai_agent import run_timetable_edit_plan
+
+# Soft-rule keys (see app/solver/weights.py::SOFT_RULE_KEYS) that
+# model_builder actually knows how to promote to a hard constraint when
+# marked "must_have" (Phase 1.5) - see build_model's gap/parallel-batch
+# blocks. Every other key stays a very-heavily-weighted soft term instead,
+# since forcing e.g. "fair_teacher_workload" to be exactly equal could
+# make an otherwise-solvable timetable infeasible for no good reason.
+HARD_PROMOTABLE_RULE_KEYS = {"minimize_student_gaps", "parallel_lab_batches"}
 from app.services.schedule_validator import validate_persisted_run
 from app.services import exporters
 from app.llm.client import claude_client
 
 router = APIRouter(prefix="/api/timetable", tags=["Timetable"])
+
+
+def _assert_department_access(user: User, department_id: Optional[str]):
+    """ADMIN can touch any department. HOD is scoped to the one department
+    on their account - everything else (FACULTY/STUDENT never reach this,
+    since their routes only require_admin_or_hod on writes) is a 403."""
+    if user.role == "HOD" and user.department_id != department_id:
+        raise HTTPException(status_code=403, detail="You can only manage timetables for your own department.")
+
+
+def _get_run_scoped(db: Session, run_id: int, user: User) -> TimetableRun:
+    run = db.query(TimetableRun).filter(TimetableRun.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    _assert_department_access(user, run.department_id)
+    return run
 
 
 def _expand_sessions_to_entries(sessions, slots_by_index) -> List[dict]:
@@ -76,18 +102,27 @@ def _run_generation(run_id: int):
         db.commit()
 
         soft_weights = {}
+        must_have_rules = set()
         if run.constraint_profile_id:
             profile = db.query(ConstraintProfile).filter(ConstraintProfile.id == run.constraint_profile_id).first()
             if profile and profile.soft_constraint_weights:
                 soft_weights = resolve_weights(profile.soft_constraint_weights)
+                # "must_have" is promoted to a real hard constraint (1.5)
+                # only for the rules model_builder knows how to make hard
+                # (see build_model) - everything else stays a heavily
+                # weighted soft term, which resolve_weights already gives it.
+                must_have_rules = {
+                    key for key in HARD_PROMOTABLE_RULE_KEYS if is_must_have(profile.soft_constraint_weights, key)
+                }
 
         problem, warnings = load_department_problem(
-            db, run.department_id, run.year_ids, run.section_ids, run.scope_mode, soft_weights,
+            db, run.department_id, run.year_ids, run.section_ids, run.scope_mode, soft_weights, must_have_rules,
+            subject_overrides=run.subject_overrides,
         )
 
         if not problem.demands:
             run.status = "completed"
-            run.completed_at = datetime.utcnow()
+            run.completed_at = datetime.now(timezone.utc)
             run.solver_output = {"objective_value": 0, "alternatives": [], "warnings": warnings, "sessions_scheduled": 0}
             db.commit()
             return
@@ -96,7 +131,7 @@ def _run_generation(run_id: int):
         blocking = [i for i in issues if i.severity == "blocking"]
         if blocking:
             run.status = "failed"
-            run.completed_at = datetime.utcnow()
+            run.completed_at = datetime.now(timezone.utc)
             report = {
                 "solver_status": "PREFLIGHT_BLOCKED",
                 "summary": {"demands": len(problem.demands)},
@@ -116,7 +151,7 @@ def _run_generation(run_id: int):
 
         if primary.status not in ("OPTIMAL", "FEASIBLE"):
             run.status = "failed"
-            run.completed_at = datetime.utcnow()
+            run.completed_at = datetime.now(timezone.utc)
             report = diag.explain_infeasibility(problem, primary.status)
             deterministic_text = diag.format_diagnostics(report)
             run.llm_explanation = _maybe_enhance_explanation(deterministic_text)
@@ -141,12 +176,12 @@ def _run_generation(run_id: int):
                 "not happen and has been blocked rather than shown. Please report this. Details: "
                 + "; ".join(f"{v.type}: {v.message}" for v in violations[:10])
             )
-            run.completed_at = datetime.utcnow()
+            run.completed_at = datetime.now(timezone.utc)
             db.commit()
             return
 
         run.status = "completed"
-        run.completed_at = datetime.utcnow()
+        run.completed_at = datetime.now(timezone.utc)
         run.solver_output = {
             "objective_value": primary.objective_value,
             "alternatives": [{"rank": i + 1, "objective_value": r.objective_value} for i, r in enumerate(results)],
@@ -159,14 +194,32 @@ def _run_generation(run_id: int):
         if run:
             run.status = "failed"
             run.llm_explanation = f"Generation failed with an internal error: {exc}"
-            run.completed_at = datetime.utcnow()
+            run.completed_at = datetime.now(timezone.utc)
             db.commit()
     finally:
         db.close()
 
 
+def _resolve_section_ids(db: Session, entries) -> set:
+    """A section is "covered" by a run either directly (a section-level
+    entry) or via a lab batch (a batch-only entry). Publishing must compare
+    both runs on this resolved set - comparing raw section_id alone misses
+    lab-only runs entirely, letting a lab timetable stay published next to
+    its own replacement."""
+    section_ids = {e.section_id for e in entries if e.section_id}
+    batch_ids = [e.batch_id for e in entries if e.batch_id]
+    if batch_ids:
+        batch_section_map = {
+            b.id: b.section_id for b in db.query(LabBatch).filter(LabBatch.id.in_(batch_ids)).all()
+        }
+        for e in entries:
+            if e.batch_id and e.batch_id in batch_section_map:
+                section_ids.add(batch_section_map[e.batch_id])
+    return section_ids
+
+
 def _maybe_enhance_explanation(deterministic_text: str) -> str:
-    if not settings.ANTHROPIC_API_KEY:
+    if not settings.LLM_API_KEY:
         return deterministic_text
     try:
         return claude_client.explain_infeasibility(deterministic_text)
@@ -179,14 +232,17 @@ def generate_timetable(
     request: TimetableGenerateRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_admin_or_hod),
 ):
     if not db.query(Department).filter(Department.id == request.department_id).first():
         raise HTTPException(status_code=400, detail="department_id does not exist")
+    _assert_department_access(admin, request.department_id)
     if request.constraint_profile_id and not db.query(ConstraintProfile).filter(
         ConstraintProfile.id == request.constraint_profile_id
     ).first():
         raise HTTPException(status_code=400, detail="constraint_profile_id does not exist")
+    if request.term_id and not db.query(AcademicTerm).filter(AcademicTerm.id == request.term_id).first():
+        raise HTTPException(status_code=400, detail="term_id does not exist")
 
     run = TimetableRun(
         department_id=request.department_id,
@@ -196,6 +252,7 @@ def generate_timetable(
         year_ids=request.year_ids,
         section_ids=request.section_ids,
         num_alternatives=request.num_alternatives,
+        term_id=request.term_id,
         created_by=admin.id,
     )
     db.add(run)
@@ -210,8 +267,13 @@ def generate_timetable(
 def list_runs(
     department_id: Optional[str] = None,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
+    # An HOD's own department scopes the list regardless of what was asked
+    # for - they cannot browse another department's runs by simply omitting
+    # (or overriding) the filter.
+    if user.role == "HOD":
+        department_id = user.department_id
     query = db.query(TimetableRun).order_by(TimetableRun.created_at.desc())
     if department_id:
         query = query.filter(TimetableRun.department_id == department_id)
@@ -219,15 +281,37 @@ def list_runs(
 
 
 @router.get("/runs/{run_id}", response_model=TimetableRunResponse)
-def get_run(run_id: int, db: Session = Depends(get_db), _user: User = Depends(get_current_user)):
+def get_run(run_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    return _get_run_scoped(db, run_id, user)
+
+
+@router.delete("/runs/{run_id}")
+def delete_run(run_id: int, db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
+    """Phase 4.4: there was previously no way to remove a run from the UI
+    at all. A published run must be unpublished first (deleting the live
+    timetable out from under students/faculty is never a one-click
+    action), and a run that other runs were edited/promoted from is kept
+    so that version history stays intact - GeneratedEntry rows cascade via
+    the FK's ondelete=CASCADE (Phase 0.2)."""
     run = db.query(TimetableRun).filter(TimetableRun.id == run_id).first()
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
-    return run
+    if run.is_published:
+        raise HTTPException(status_code=409, detail="This timetable is published - unpublish it before deleting.")
+    children = db.query(TimetableRun).filter(TimetableRun.parent_run_id == run_id).count()
+    if children:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{children} version(s) were created from this timetable - delete those first.",
+        )
+    db.delete(run)
+    db.commit()
+    return {"message": "Timetable deleted"}
 
 
 @router.get("/runs/{run_id}/entries", response_model=List[TimetableEntryResponse])
-def get_entries(run_id: int, rank: int = 1, db: Session = Depends(get_db), _user: User = Depends(get_current_user)):
+def get_entries(run_id: int, rank: int = 1, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    _get_run_scoped(db, run_id, user)
     return (
         db.query(GeneratedEntry)
         .filter(GeneratedEntry.timetable_run_id == run_id, GeneratedEntry.alternative_rank == rank)
@@ -236,7 +320,8 @@ def get_entries(run_id: int, rank: int = 1, db: Session = Depends(get_db), _user
 
 
 @router.get("/runs/{run_id}/validate", response_model=ValidationResponse)
-def validate_run(run_id: int, rank: int = 1, db: Session = Depends(get_db), _user: User = Depends(get_current_user)):
+def validate_run(run_id: int, rank: int = 1, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    _get_run_scoped(db, run_id, user)
     violations = validate_persisted_run(db, run_id, alternative_rank=rank)
     return ValidationResponse(
         valid=len(violations) == 0,
@@ -245,10 +330,8 @@ def validate_run(run_id: int, rank: int = 1, db: Session = Depends(get_db), _use
 
 
 @router.get("/runs/{run_id}/alternatives", response_model=AlternativesResponse)
-def get_alternatives(run_id: int, db: Session = Depends(get_db), _user: User = Depends(get_current_user)):
-    run = db.query(TimetableRun).filter(TimetableRun.id == run_id).first()
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+def get_alternatives(run_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    run = _get_run_scoped(db, run_id, user)
     alt_meta = (run.solver_output or {}).get("alternatives", [])
     summaries = []
     prev_map = None
@@ -273,10 +356,8 @@ def get_alternatives(run_id: int, db: Session = Depends(get_db), _user: User = D
 
 
 @router.get("/runs/{run_id}/alternatives/{rank}", response_model=AlternativeDetailResponse)
-def get_alternative_detail(run_id: int, rank: int, db: Session = Depends(get_db), _user: User = Depends(get_current_user)):
-    run = db.query(TimetableRun).filter(TimetableRun.id == run_id).first()
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+def get_alternative_detail(run_id: int, rank: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    run = _get_run_scoped(db, run_id, user)
     alt_meta = {item["rank"]: item for item in (run.solver_output or {}).get("alternatives", [])}
     if rank not in alt_meta:
         raise HTTPException(status_code=404, detail="Alternative not found")
@@ -289,10 +370,8 @@ def get_alternative_detail(run_id: int, rank: int, db: Session = Depends(get_db)
 
 
 @router.post("/runs/{run_id}/alternatives/{rank}/use", response_model=TimetableRunResponse)
-def use_alternative(run_id: int, rank: int, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
-    parent = db.query(TimetableRun).filter(TimetableRun.id == run_id).first()
-    if not parent:
-        raise HTTPException(status_code=404, detail="Run not found")
+def use_alternative(run_id: int, rank: int, db: Session = Depends(get_db), admin: User = Depends(require_admin_or_hod)):
+    parent = _get_run_scoped(db, run_id, admin)
     entries = (
         db.query(GeneratedEntry)
         .filter(GeneratedEntry.timetable_run_id == run_id, GeneratedEntry.alternative_rank == rank)
@@ -305,8 +384,9 @@ def use_alternative(run_id: int, rank: int, db: Session = Depends(get_db), admin
         department_id=parent.department_id, constraint_profile_id=parent.constraint_profile_id,
         status="completed", scope_mode=parent.scope_mode, year_ids=parent.year_ids,
         section_ids=parent.section_ids, num_alternatives=1, parent_run_id=parent.id,
+        term_id=parent.term_id,
         change_summary=f"Promoted alternative #{rank} from run #{run_id}",
-        completed_at=datetime.utcnow(), created_by=admin.id,
+        completed_at=datetime.now(timezone.utc), created_by=admin.id,
         solver_output={"objective_value": (parent.solver_output or {}).get("alternatives", [{}])[rank - 1].get("objective_value")
                        if (parent.solver_output or {}).get("alternatives") else None},
     )
@@ -324,33 +404,21 @@ def use_alternative(run_id: int, rank: int, db: Session = Depends(get_db), admin
 
 
 @router.get("/runs/{run_id}/explain")
-def explain_run(run_id: int, db: Session = Depends(get_db), _user: User = Depends(get_current_user)):
-    run = db.query(TimetableRun).filter(TimetableRun.id == run_id).first()
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+def explain_run(run_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    run = _get_run_scoped(db, run_id, user)
     return {"explanation": run.llm_explanation or "No explanation is available for this run."}
 
 
 @router.post("/runs/{run_id}/publish", response_model=TimetableRunResponse)
-def publish_run(run_id: int, db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
-    run = db.query(TimetableRun).filter(TimetableRun.id == run_id).first()
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+def publish_run(run_id: int, db: Session = Depends(get_db), admin: User = Depends(require_admin_or_hod)):
+    run = _get_run_scoped(db, run_id, admin)
     if run.status != "completed":
         raise HTTPException(status_code=400, detail="Only a completed run can be published")
 
     entries = db.query(GeneratedEntry).filter(
         GeneratedEntry.timetable_run_id == run_id, GeneratedEntry.alternative_rank == 1,
     ).all()
-    section_ids = {e.section_id for e in entries if e.section_id}
-    batch_section_map = {
-        b.id: b.section_id for b in db.query(LabBatch).filter(
-            LabBatch.id.in_([e.batch_id for e in entries if e.batch_id])
-        ).all()
-    }
-    for e in entries:
-        if e.batch_id and e.batch_id in batch_section_map:
-            section_ids.add(batch_section_map[e.batch_id])
+    section_ids = _resolve_section_ids(db, entries)
 
     if section_ids:
         other_published = (
@@ -362,22 +430,20 @@ def publish_run(run_id: int, db: Session = Depends(get_db), _admin: User = Depen
             other_entries = db.query(GeneratedEntry).filter(
                 GeneratedEntry.timetable_run_id == other.id, GeneratedEntry.alternative_rank == 1,
             ).all()
-            other_sections = {e.section_id for e in other_entries if e.section_id}
+            other_sections = _resolve_section_ids(db, other_entries)
             if other_sections & section_ids:
                 other.is_published = False
 
     run.is_published = True
-    run.published_at = datetime.utcnow()
+    run.published_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(run)
     return run
 
 
 @router.get("/runs/{run_id}/versions", response_model=List[TimetableRunResponse])
-def get_versions(run_id: int, db: Session = Depends(get_db), _user: User = Depends(get_current_user)):
-    run = db.query(TimetableRun).filter(TimetableRun.id == run_id).first()
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+def get_versions(run_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    run = _get_run_scoped(db, run_id, user)
 
     all_runs = {r.id: r for r in db.query(TimetableRun).all()}
     root_id = run.id
@@ -403,7 +469,9 @@ def get_versions(run_id: int, db: Session = Depends(get_db), _user: User = Depen
 
 
 @router.get("/runs/{from_run_id}/compare/{to_run_id}")
-def compare_runs(from_run_id: int, to_run_id: int, db: Session = Depends(get_db), _user: User = Depends(get_current_user)):
+def compare_runs(from_run_id: int, to_run_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    _get_run_scoped(db, from_run_id, user)
+    _get_run_scoped(db, to_run_id, user)
     from_entries = db.query(GeneratedEntry).filter(
         GeneratedEntry.timetable_run_id == from_run_id, GeneratedEntry.alternative_rank == 1,
     ).all()
@@ -428,27 +496,43 @@ def compare_runs(from_run_id: int, to_run_id: int, db: Session = Depends(get_db)
     return {"changes": changes}
 
 
-@router.get("/me")
-def my_timetable(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def _my_timetable_entries_and_term(db: Session, user: User):
+    """Every published run may contribute entries (a student/faculty
+    member's week can be assembled from several separately-generated,
+    separately-published runs), so this returns the union across all of
+    them - plus the term of whichever contributing run has one, for the
+    calendar export's date range (Phase 1.7/4.3). Runs disagreeing on term
+    is a real but rare edge case; the first one found wins rather than
+    guessing further."""
     published_runs = db.query(TimetableRun).filter(TimetableRun.is_published.is_(True)).all()
     entries: List[GeneratedEntry] = []
+    term = None
     for run in published_runs:
         run_entries = db.query(GeneratedEntry).filter(
             GeneratedEntry.timetable_run_id == run.id, GeneratedEntry.alternative_rank == 1,
         ).all()
+        matched = []
         if user.role == "FACULTY" and user.teacher_id:
-            entries.extend([e for e in run_entries if e.teacher_id == user.teacher_id])
+            matched = [e for e in run_entries if e.teacher_id == user.teacher_id]
         elif user.role == "STUDENT" and user.section_id:
             batch_ids = {b.id for b in db.query(LabBatch).filter(LabBatch.section_id == user.section_id).all()}
-            entries.extend([e for e in run_entries if e.section_id == user.section_id or e.batch_id in batch_ids])
+            matched = [e for e in run_entries if e.section_id == user.section_id or e.batch_id in batch_ids]
+        if matched:
+            entries.extend(matched)
+            if term is None and run.term_id:
+                term = db.query(AcademicTerm).filter(AcademicTerm.id == run.term_id).first()
+    return entries, term
+
+
+@router.get("/me")
+def my_timetable(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    entries, _term = _my_timetable_entries_and_term(db, user)
     return [TimetableEntryResponse.model_validate(e) for e in entries]
 
 
 @router.post("/runs/{run_id}/edit", response_model=EditEntryResponse)
-def edit_entry(run_id: int, request: EditEntryRequest, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
-    run = db.query(TimetableRun).filter(TimetableRun.id == run_id).first()
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+def edit_entry(run_id: int, request: EditEntryRequest, db: Session = Depends(get_db), admin: User = Depends(require_admin_or_hod)):
+    run = _get_run_scoped(db, run_id, admin)
 
     all_entries = db.query(GeneratedEntry).filter(
         GeneratedEntry.timetable_run_id == run_id, GeneratedEntry.alternative_rank == 1,
@@ -467,7 +551,6 @@ def edit_entry(run_id: int, request: EditEntryRequest, db: Session = Depends(get
     new_room_id = request.new_room_id or target.room_id
     new_teacher_id = request.new_teacher_id or target.teacher_id
 
-    from app.models import TimeSlot
     slots = build_slot_calendar([
         {"day": t.day, "period_index": t.period_index, "start_time": t.start_time, "end_time": t.end_time}
         for t in db.query(TimeSlot).all()
@@ -526,15 +609,163 @@ def edit_entry(run_id: int, request: EditEntryRequest, db: Session = Depends(get
                 break
         return EditEntryResponse(status="conflict", conflicts=conflicts, suggested_slots=suggestions)
 
-    for e, (day, period) in zip(block, new_positions):
-        e.day = day
-        e.period = period
-        e.room_id = new_room_id
-        e.teacher_id = new_teacher_id
-    db.commit()
+    # Never mutate this run's own rows - not even for a draft. Fork a child
+    # run with the move applied to a fresh copy of every rank-1 entry, so
+    # the original (which may already be published and live) is untouched,
+    # `change_summary` is real, and "View draft run #N" lands somewhere new.
+    moved_position = {e.id: pos for e, pos in zip(block, new_positions)}
+    old_day, old_period = target.day, target.period
+    new_day, new_period = new_positions[0]
+    summary = request.reason or (
+        f"Moved {target.subject_id} from {old_day} period {old_period} to {new_day} period {new_period}"
+    )
 
-    updated_run = TimetableRunResponse.model_validate(run)
+    new_run = TimetableRun(
+        department_id=run.department_id, constraint_profile_id=run.constraint_profile_id,
+        status="completed", scope_mode=run.scope_mode, year_ids=run.year_ids,
+        section_ids=run.section_ids, num_alternatives=1, parent_run_id=run.id,
+        term_id=run.term_id,
+        change_summary=summary, completed_at=datetime.now(timezone.utc), created_by=admin.id,
+        solver_output=run.solver_output,
+    )
+    db.add(new_run)
+    db.flush()
+
+    for e in all_entries:
+        moved = e.id in moved_position
+        day, period = moved_position[e.id] if moved else (e.day, e.period)
+        db.add(GeneratedEntry(
+            timetable_run_id=new_run.id, alternative_rank=1, session_group=e.session_group,
+            day=day, period=period, section_id=e.section_id, batch_id=e.batch_id,
+            subject_id=e.subject_id,
+            teacher_id=new_teacher_id if moved else e.teacher_id,
+            room_id=new_room_id if moved else e.room_id,
+        ))
+    db.commit()
+    db.refresh(new_run)
+
+    updated_run = TimetableRunResponse.model_validate(new_run)
     return EditEntryResponse(status="applied", new_run=updated_run)
+
+
+@router.post("/runs/{run_id}/parse-move-nl", response_model=NLMoveParseResponse)
+def parse_move_nl(
+    run_id: int, request: NLMoveParseRequest,
+    db: Session = Depends(get_db), admin: User = Depends(require_admin_or_hod),
+):
+    """AI-assisted only: turns a plain-English "move this to..." instruction
+    into a (day, period) pick from the institution's real configured time
+    slots - never an invented one (see app/llm/client.py::parse_move_instruction).
+
+    This never writes anything and never even checks room/teacher/student
+    conflicts - it only pre-fills EditEntryModal's day/period selects for
+    the admin to review. The actual move, and the real conflict check,
+    only happen if the admin then clicks "Move class", which calls
+    POST /runs/{run_id}/edit above exactly as if they'd picked the slot
+    manually.
+    """
+    _get_run_scoped(db, run_id, admin)
+    available_slots = [
+        {"day": slot.day, "period": slot.period_index,
+         "start_time": str(slot.start_time), "end_time": str(slot.end_time)}
+        for slot in db.query(TimeSlot).all()
+    ]
+    try:
+        result = claude_client.parse_move_instruction(
+            request.text,
+            current={
+                "subject_id": request.subject_id,
+                "day": request.current_day,
+                "period": request.current_period,
+            },
+            available_slots=available_slots,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"AI provider request failed for model '{claude_client.model}'. Try again.",
+        ) from e
+    return NLMoveParseResponse(**result)
+
+
+@router.post("/runs/{run_id}/ai-plan", response_model=TimetableAIPlanResponse)
+def timetable_ai_plan(
+    run_id: int, request: TimetableAIPlanRequest,
+    db: Session = Depends(get_db), admin: User = Depends(require_admin_or_hod),
+):
+    """AI-assisted only: turns a plain-English instruction about this
+    timetable ("remove Cloud Computing", "give DBMS one more class/week for
+    section B") into a list of proposed subject_overrides actions (see
+    app/services/timetable_ai_agent.py). Nothing is applied or regenerated
+    here - the admin reviews the plan and calls ai-apply with what they
+    approve.
+    """
+    run = _get_run_scoped(db, run_id, admin)
+    try:
+        result = run_timetable_edit_plan(db, run, request.instruction)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"AI provider request failed for model '{claude_client.model}'. Try again.",
+        ) from e
+    return TimetableAIPlanResponse(**result)
+
+
+@router.post("/runs/{run_id}/ai-apply", response_model=TimetableRunResponse)
+def timetable_ai_apply(
+    run_id: int, request: TimetableAIApplyRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db), admin: User = Depends(require_admin_or_hod),
+):
+    """Applies the admin-approved action list from ai-plan by forking a new
+    TimetableRun (same scope/profile as `run_id`, subject_overrides merged
+    on top of the parent's own) and regenerating it through the real solver
+    - exactly the same "solve, then let the admin publish" path as any other
+    generation, so the new version is checked for feasibility like every
+    other run, not just heuristically patched in place.
+    """
+    run = _get_run_scoped(db, run_id, admin)
+    if not request.actions:
+        raise HTTPException(status_code=400, detail="No actions to apply")
+
+    merged: Dict[Tuple[str, str], Dict] = {
+        (o["section_id"], o["subject_id"]): dict(o) for o in (run.subject_overrides or [])
+    }
+    descriptions = []
+    for action in request.actions:
+        payload = action.payload
+        if "section_id" not in payload or "subject_id" not in payload:
+            raise HTTPException(status_code=400, detail=f"Malformed action: {action.action_type}")
+        key = (payload["section_id"], payload["subject_id"])
+        existing = merged.get(key, {"section_id": payload["section_id"], "subject_id": payload["subject_id"]})
+        if action.action_type == "exclude_subject":
+            existing["exclude"] = True
+        elif action.action_type == "change_weekly_hours":
+            existing["weekly_hours"] = payload.get("weekly_hours")
+            existing["exclude"] = False
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown action_type: {action.action_type}")
+        merged[key] = existing
+        descriptions.append(action.description)
+
+    new_run = TimetableRun(
+        department_id=run.department_id, constraint_profile_id=run.constraint_profile_id,
+        status="pending", scope_mode=run.scope_mode, year_ids=run.year_ids,
+        section_ids=run.section_ids, num_alternatives=run.num_alternatives, parent_run_id=run.id,
+        term_id=run.term_id, created_by=admin.id,
+        change_summary="AI assistant: " + "; ".join(descriptions),
+        subject_overrides=list(merged.values()),
+    )
+    db.add(new_run)
+    db.commit()
+    db.refresh(new_run)
+
+    background_tasks.add_task(_run_generation, new_run.id)
+    return new_run
 
 
 @router.get("/runs/{run_id}/export")
@@ -544,14 +775,31 @@ def export_run(
     rank: int = 1,
     view: str = "section",
     entity_id: Optional[str] = None,
+    year_id: Optional[str] = None,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
-    run = db.query(TimetableRun).filter(TimetableRun.id == run_id).first()
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+    run = _get_run_scoped(db, run_id, user)
     if view not in ("section", "teacher", "room"):
         raise HTTPException(status_code=400, detail="view must be section, teacher, or room")
+
+    # Phase 4.2: exporting every section of a year into one workbook (one
+    # sheet each) instead of a single section/teacher/room.
+    if year_id:
+        if format != "xlsx":
+            raise HTTPException(status_code=400, detail="Exporting a whole year is only supported for xlsx")
+        year = db.query(AcademicYear).filter(AcademicYear.id == year_id).first()
+        if not year:
+            raise HTTPException(status_code=404, detail="Academic year not found")
+        try:
+            content = exporters.export_xlsx_year(db, run_id, rank, year_id, year.name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return StreamingResponse(
+            io.BytesIO(content), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=timetable_{year_id}.xlsx"},
+        )
+
     if not entity_id:
         first_entry = db.query(GeneratedEntry).filter(
             GeneratedEntry.timetable_run_id == run_id, GeneratedEntry.alternative_rank == rank,
@@ -560,17 +808,19 @@ def export_run(
             raise HTTPException(status_code=404, detail="No entries to export for this run")
         entity_id = {"section": first_entry.section_id, "teacher": first_entry.teacher_id, "room": first_entry.room_id}[view]
 
-    title = f"Weekly Timetable | Run #{run_id}"
+    term = db.query(AcademicTerm).filter(AcademicTerm.id == run.term_id).first() if run.term_id else None
+
+    title = "Tentative Time Table"
     if format == "xlsx":
         content = exporters.export_xlsx(db, run_id, rank, view, entity_id, title)
         media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         filename = f"timetable_run_{run_id}.xlsx"
     elif format == "pdf":
-        content = exporters.export_pdf(db, run_id, rank, view, entity_id, title)
+        content = exporters.export_pdf(db, run_id, rank, view, entity_id, title, term=term)
         media_type = "application/pdf"
         filename = f"timetable_run_{run_id}.pdf"
     elif format == "ics":
-        content = exporters.export_ics(db, run_id, rank, view, entity_id)
+        content = exporters.export_ics(db, run_id, rank, view, entity_id, term=term)
         media_type = "text/calendar"
         filename = f"timetable_run_{run_id}.ics"
     else:
@@ -579,4 +829,20 @@ def export_run(
     return StreamingResponse(
         io.BytesIO(content), media_type=media_type,
         headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@router.get("/me/calendar.ics")
+def export_my_calendar(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Phase 4.3: the .ics feed moves here, off the admin timetable page -
+    no administrator subscribes to their own generated output in Google
+    Calendar/Outlook, but a student or faculty member genuinely does."""
+    entries, term = _my_timetable_entries_and_term(db, user)
+    if not entries:
+        raise HTTPException(status_code=404, detail="No published timetable to export yet.")
+    entity_type = "teacher" if user.role == "FACULTY" else "section"
+    content = exporters.export_ics_from_entries(db, entries, entity_type, term=term)
+    return StreamingResponse(
+        io.BytesIO(content), media_type="text/calendar",
+        headers={"Content-Disposition": "attachment; filename=my-timetable.ics"},
     )

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, AlertTriangle, CheckCircle } from 'lucide-react';
+import { X, AlertTriangle, CheckCircle, Sparkles } from 'lucide-react';
 import { constraintsApi, timetableApi } from '../api/client';
 import { TimetableEntry } from '../types';
 import { useNavigate } from 'react-router-dom';
@@ -19,6 +19,9 @@ export function EditEntryModal({ runId, entry, subjectName, onClose }: Props) {
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [slots, setSlots] = useState<ScheduleSlot[]>(DEFAULT_SLOTS);
+  const [nlMoveText, setNlMoveText] = useState('');
+  const [nlMoveLoading, setNlMoveLoading] = useState(false);
+  const [nlMoveNote, setNlMoveNote] = useState<string | null>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -28,6 +31,29 @@ export function EditEntryModal({ runId, entry, subjectName, onClose }: Props) {
   }, []);
 
   const periodsForDay = slots.filter((slot) => slot.day === newDay).sort((a, b) => a.period_index - b.period_index);
+
+  const askAI = async () => {
+    if (!nlMoveText.trim()) return;
+    setNlMoveLoading(true);
+    setNlMoveNote(null);
+    try {
+      const res = await timetableApi.parseMoveNL(runId, {
+        text: nlMoveText,
+        subject_id: entry.subject_id,
+        current_day: entry.day,
+        current_period: entry.period,
+      });
+      if (res.data.new_day && res.data.new_period) {
+        setNewDay(res.data.new_day);
+        setNewPeriod(res.data.new_period);
+      }
+      setNlMoveNote(res.data.note || (res.data.new_day ? null : "Couldn't confidently pick a slot - choose one below."));
+    } catch (err: any) {
+      setNlMoveNote(err?.response?.data?.detail || 'AI move assistant failed. Pick a day/period below instead.');
+    } finally {
+      setNlMoveLoading(false);
+    }
+  };
 
   const submit = async (autoResolve: boolean, forceDay?: string, forcePeriod?: number) => {
     setSubmitting(true);
@@ -70,6 +96,32 @@ export function EditEntryModal({ runId, entry, subjectName, onClose }: Props) {
 
         {!result && (
           <>
+            <div className="mb-4 p-3 border border-gray-200 rounded-lg bg-gray-50">
+              <label className="flex items-center gap-1.5 text-xs font-medium text-gray-600 mb-1.5">
+                <Sparkles size={14} className="text-purple-600" />
+                Or describe where to move it
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={nlMoveText}
+                  onChange={(e) => setNlMoveText(e.target.value)}
+                  placeholder='e.g. "Wednesday afternoon" or "same time next day"'
+                  className="flex-1 px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <button
+                  type="button"
+                  onClick={askAI}
+                  disabled={nlMoveLoading || !nlMoveText.trim()}
+                  className="px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 disabled:opacity-50"
+                >
+                  {nlMoveLoading ? '...' : 'Ask AI'}
+                </button>
+              </div>
+              {nlMoveNote && <p className="text-xs text-gray-500 mt-1.5">{nlMoveNote}</p>}
+              <p className="text-xs text-gray-400 mt-1.5">This only fills in the day/period below - review it, then click "Move class" to apply.</p>
+            </div>
+
             <div className="grid grid-cols-2 gap-3 mb-4">
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">New day</label>

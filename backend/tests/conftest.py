@@ -75,6 +75,12 @@ def client(db_session, _temp_engine, monkeypatch):
 
     TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_temp_engine)
     monkeypatch.setattr(db_module, "SessionLocal", TestSessionLocal)
+    # app.main.lifespan also reads app.db.engine directly (schema
+    # migrations, PRAGMA table_info, ...) - without patching this too, the
+    # lifespan that fires on `with TestClient(app)` below silently runs its
+    # seeding (subject_types, the default department, ...) against the
+    # REAL dev database instead of this test's isolated one.
+    monkeypatch.setattr(db_module, "engine", _temp_engine)
 
     app.dependency_overrides[get_db] = _override_get_db
     with TestClient(app) as test_client:

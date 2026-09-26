@@ -1,7 +1,9 @@
+from typing import List
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.db import get_db
-from app.models import User, Teacher, Section
+from app.models import User, Teacher, Section, Department
 from app.schemas import UserCreate, UserResponse, LoginRequest, TokenResponse
 from app.auth.security import hash_password, verify_password, create_access_token
 from app.auth.dependencies import get_current_user, require_admin
@@ -46,8 +48,12 @@ def register(
     if db.query(User).filter(User.email == user.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    if user.role not in ("ADMIN", "FACULTY", "STUDENT"):
-        raise HTTPException(status_code=400, detail="role must be ADMIN, FACULTY, or STUDENT")
+    if user.role not in ("ADMIN", "HOD", "FACULTY", "STUDENT"):
+        raise HTTPException(status_code=400, detail="role must be ADMIN, HOD, FACULTY, or STUDENT")
+
+    if user.role == "HOD":
+        if not user.department_id or not db.query(Department).filter(Department.id == user.department_id).first():
+            raise HTTPException(status_code=400, detail="Valid department_id is required for HOD users")
 
     if user.role == "FACULTY":
         if not user.teacher_id or not db.query(Teacher).filter(Teacher.id == user.teacher_id).first():
@@ -62,6 +68,7 @@ def register(
         hashed_password=hash_password(user.password),
         full_name=user.full_name,
         role=user.role,
+        department_id=user.department_id if user.role == "HOD" else None,
         teacher_id=user.teacher_id if user.role == "FACULTY" else None,
         section_id=user.section_id if user.role == "STUDENT" else None,
     )
@@ -86,3 +93,30 @@ def login(credentials: LoginRequest, db: Session = Depends(get_db)):
 @router.get("/me", response_model=UserResponse)
 def read_current_user(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+@router.get("/users", response_model=List[UserResponse])
+def list_users(db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
+    """Admin-only roster of every account, so an admin can see who has
+    access and at what role before handing out or revoking permissions."""
+    return db.query(User).order_by(User.full_name).all()
+
+
+@router.patch("/users/{user_id}/active", response_model=UserResponse)
+def set_user_active(
+    user_id: int,
+    is_active: bool,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Revoke or restore login access without deleting the account (and
+    its history of who-changed-what)."""
+    if user_id == admin.id and not is_active:
+        raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.is_active = is_active
+    db.commit()
+    db.refresh(user)
+    return user

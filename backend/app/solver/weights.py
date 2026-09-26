@@ -35,6 +35,26 @@ SOFT_RULE_KEYS = [
     "avoid_edge_periods",
 ]
 
+# Plain-English description of each key, kept in lockstep with the
+# frontend's RULE_DEFINITIONS labels (ConstraintBuilder.tsx). This is the
+# copy the LLM prompt in app/llm/client.py is built from, so a natural-
+# language instruction can only ever be mapped onto a rule the solver
+# actually reads - never left dangling as "unsupported" just because the
+# model wasn't told the rule exists.
+SOFT_RULE_DESCRIPTIONS: Dict[str, str] = {
+    "minimize_student_gaps": "Don't leave free periods in the middle of a student's day.",
+    "balance_load_across_days": "Spread classes evenly across the week instead of leaving one day nearly empty.",
+    "teacher_preferred_slots": "Respect the availability windows a teacher marked as preferred.",
+    "fair_teacher_workload": "Share teaching load fairly across faculty - don't let one teacher's week be much fuller than another's.",
+    "parallel_lab_batches": "Run a section's lab batches at the same time (different rooms), not on different days.",
+    "avoid_edge_periods": "Avoid scheduling classes in the very first or very last period of the day.",
+}
+
+# The two rules that can actually be promoted to a hard constraint when
+# level == "must_have" - see model_builder.py's must_have_rules handling
+# and ConstraintBuilder.tsx's HARD_PROMOTABLE_KEYS (kept in lockstep).
+HARD_PROMOTABLE_KEYS = {"minimize_student_gaps", "parallel_lab_batches"}
+
 PRESETS: Dict[str, Dict[str, str]] = {
     "balanced": {key: "very_important" for key in SOFT_RULE_KEYS},
     "student_friendly": {

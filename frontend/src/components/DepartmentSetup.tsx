@@ -5,11 +5,11 @@ import { useDepartment } from '../context/DepartmentContext';
 import { Plus, Building2, GraduationCap } from 'lucide-react';
 
 /**
- * Departments are solved independently (see the department docstring on
- * the backend for why) - so before anything else, an admin needs an
- * institution and at least one department, and every other setup step
- * (subjects, teachers, rooms, generation) works within the department
- * selected here.
+ * A default institution and department are provisioned automatically, so
+ * most colleges never need this page. It only matters once a college adds
+ * a second department - departments are solved independently (see the
+ * Department model docstring on the backend for why), so this is where
+ * that becomes visible and configurable.
  */
 export function DepartmentSetup() {
   const { departments, departmentId, setDepartmentId, refresh } = useDepartment();

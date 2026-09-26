@@ -23,13 +23,18 @@ class Settings(BaseSettings):
 
     CORS_ORIGINS: str = '["http://localhost:5173","http://localhost:3000"]'
 
-    # Optional AI features (Claude). Left blank, features degrade gracefully.
-    ANTHROPIC_API_KEY: str = ""
-    ANTHROPIC_MODEL: str = "claude-opus-5"
+    # Optional AI features, served through any OpenAI-compatible chat
+    # completions endpoint - OpenRouter, Ollama, NVIDIA NIM, OpenAI itself,
+    # etc. Point LLM_BASE_URL at whichever provider you want; LLM_API_KEY
+    # and LLM_MODEL follow that provider's own values. Left blank, features
+    # degrade gracefully.
+    LLM_API_KEY: str = ""
+    LLM_BASE_URL: str = "https://openrouter.ai/api/v1"
+    LLM_MODEL: str = "anthropic/claude-opus-4.5"
 
     # Solver defaults. All overridable per constraint profile / request;
     # these are only the fallback when a caller doesn't specify.
-    SOLVER_MAX_SECONDS: int = 240
+    SOLVER_MAX_SECONDS: int = 300
     SOLVER_NUM_WORKERS: int = 8
     SOLVER_DEFAULT_ALTERNATIVES: int = 3
 

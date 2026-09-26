@@ -1,6 +1,6 @@
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, field_serializer
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 VALID_SCOPE_MODES = {"fit_into_existing", "fresh"}
 
@@ -8,6 +8,7 @@ VALID_SCOPE_MODES = {"fit_into_existing", "fresh"}
 class TimetableGenerateRequest(BaseModel):
     department_id: str
     constraint_profile_id: Optional[str] = None
+    term_id: Optional[str] = None
     num_alternatives: int = Field(default=1, ge=1, le=5)
     year_ids: Optional[List[str]] = None
     section_ids: Optional[List[str]] = None
@@ -29,6 +30,7 @@ class TimetableRunResponse(BaseModel):
     id: int
     department_id: Optional[str] = None
     constraint_profile_id: Optional[str] = None
+    term_id: Optional[str] = None
     status: str
     scope_mode: Optional[str] = None
     year_ids: Optional[List[str]] = None
@@ -44,6 +46,20 @@ class TimetableRunResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+    @field_serializer("created_at", "completed_at", "published_at")
+    def _serialize_utc(self, value: Optional[datetime], _info):
+        """Every value here is a UTC instant (DateTime(timezone=True), set
+        with datetime.now(timezone.utc)), but SQLite drops the tzinfo on
+        round-trip regardless of what was stored, so a naive value read
+        back is still UTC - it just doesn't say so. Without an explicit
+        'Z'/offset, `new Date(...)` on the frontend reads it as local time
+        instead, showing IST runs as 5h30m in the past (Phase 4.4)."""
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat().replace("+00:00", "Z")
 
 
 class EntryIdentifier(BaseModel):
@@ -95,9 +111,9 @@ class TimetableEntryResponse(BaseModel):
     period: int
     section_id: Optional[str] = None
     batch_id: Optional[str] = None
-    subject_id: str
-    teacher_id: str
-    room_id: str
+    subject_id: Optional[str] = None
+    teacher_id: Optional[str] = None
+    room_id: Optional[str] = None
 
     class Config:
         from_attributes = True

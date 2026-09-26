@@ -4,7 +4,7 @@ questions every duration>1 demand needs: "which slot indices could a
 D-period block legally start at", given day boundaries and a lunch window.
 """
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from app.solver.types import Slot
 
@@ -65,20 +65,24 @@ def contiguous_day_runs(slots: List[Slot]) -> List[List[int]]:
 def valid_starts_for_duration(
     slots: List[Slot],
     duration: int,
-    lunch_window: Optional[Tuple[int, int]] = None,
+    lunch_windows: Optional[Dict[str, Tuple[int, int]]] = None,
 ) -> List[int]:
     """All slot indices at which a `duration`-period contiguous block could
     legally start: the whole block must lie in one same-day back-to-back
-    run, and must not overlap `lunch_window` (start_minutes, end_minutes)
-    if given."""
+    run, and must not overlap that day's lunch window (start_minutes,
+    end_minutes), if `lunch_windows` (day -> window) has one for that day.
+    Per-day (Phase 2.5) rather than one window applied to every day, so a
+    day can run a class straight through what's lunch on every other day.
+    """
     by_index = {s.index: s for s in slots}
     valid: List[int] = []
     for run in contiguous_day_runs(slots):
         for i in range(0, len(run) - duration + 1):
             window = run[i:i + duration]
             first, last = by_index[window[0]], by_index[window[-1]]
-            if lunch_window:
-                lunch_start, lunch_end = lunch_window
+            day_lunch = (lunch_windows or {}).get(first.day)
+            if day_lunch:
+                lunch_start, lunch_end = day_lunch
                 if first.start_minutes < lunch_end and lunch_start < last.end_minutes:
                     continue
             valid.append(window[0])

@@ -5,7 +5,8 @@ export interface CurrentUser {
   id: number;
   email: string;
   full_name: string;
-  role: 'ADMIN' | 'FACULTY' | 'STUDENT';
+  role: 'ADMIN' | 'HOD' | 'FACULTY' | 'STUDENT';
+  department_id: string | null;
   teacher_id: string | null;
   section_id: string | null;
 }

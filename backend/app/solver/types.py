@@ -44,13 +44,18 @@ class TeacherInfo:
 @dataclass
 class SessionDemand:
     """One class that needs a (start slot, room, teacher). A subject with
-    weekly_hours=4 and block_size=1 produces four of these; a lab with
-    weekly_hours=2 and block_size=2 produces one, with duration=2.
+    sessions_per_week=4 and periods_per_session=1 produces four of these; a
+    lab with sessions_per_week=1 and periods_per_session=2 produces one,
+    with duration=2. When back_to_back=False splits a session across
+    non-contiguous single periods, the resulting demands share
+    (subject_id, audience_id, session_index) but not `id` - model_builder
+    uses that shared key to add a soft same-day preference between them
+    (Phase 2.4).
     """
-    id: str  # stable id: f"{subject_id}:{audience_id}:{session_index}"
+    id: str  # stable id: f"{subject_id}:{audience_id}:{session_index}[:{part}]"
     subject_id: str
     subject_name: str
-    kind: str  # theory | lab | tutorial
+    kind: str  # theory | lab | tutorial | ... (a subject_types catalog id)
     audience_type: str  # section | batch
     audience_id: str
     parent_section_id: str  # the section itself, even for batch-level demands
@@ -63,6 +68,19 @@ class SessionDemand:
     valid_start_slot_indices: List[int]
     max_per_day: int
     elective_group_id: Optional[str] = None
+    # Phase 2.9: how sibling lab-batch demands sharing (subject_id,
+    # parent_section_id, session_index) relate to each other in time/space.
+    #   independent - no hard link; only the soft "parallel_lab_batches"
+    #     nudge (if weighted) pulls them toward the same start.
+    #   parallel  - same start slot, hard; rooms and teachers stay
+    #     independent per batch (separate rooms, can be separate teachers).
+    #   sequential - hard: batches may never overlap in time (forced apart).
+    #   merged - hard: same start slot AND same room AND same teacher -
+    #     the batches are physically taught as one combined class. Only
+    #     valid when a single room's capacity covers every batch's
+    #     combined strength (data_loader filters eligible_room_ids
+    #     accordingly before this ever reaches the model).
+    batch_mode: str = "independent"
 
 
 @dataclass
@@ -74,6 +92,18 @@ class FixedBooking:
     start_slot_index: int
     duration: int = 1
     reason: str = ""
+
+
+@dataclass
+class SoftAvoidRule:
+    """One `priority="soft"` ConstraintRule (see Phase 1.4): a preference
+    that a teacher/room/section NOT be scheduled in `slot_indices`,
+    contributing `weight` to the objective per period placed there instead
+    of forbidding it outright the way a hard rule would."""
+    scope: str  # teacher | room | section
+    resource_id: str
+    slot_indices: set = field(default_factory=set)
+    weight: int = 0
 
 
 @dataclass
@@ -89,6 +119,12 @@ class ProblemData:
     # so the independent validator can recheck lunch overlap itself,
     # without trusting that the model builder's domain restriction worked.
     lunch_windows: Dict[str, Any] = field(default_factory=dict)
+    # Soft-rule keys (see app/solver/weights.py::SOFT_RULE_KEYS) the admin
+    # marked "must_have" that this problem promotes to a hard constraint
+    # instead of a heavily-weighted objective term (Phase 1.5). Only keys
+    # model_builder actually knows how to promote belong here.
+    must_have_rules: set = field(default_factory=set)
+    soft_avoid_rules: List[SoftAvoidRule] = field(default_factory=list)
 
 
 @dataclass

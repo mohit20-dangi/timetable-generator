@@ -1,29 +1,46 @@
 import { useState, useEffect } from 'react';
-import { roomsApi } from '../api/client';
-import { Room } from '../types';
+import { roomsApi, equipmentApi, departmentsApi, constraintsApi } from '../api/client';
+import { Room, Equipment, Department } from '../types';
 import { useDepartment } from '../context/DepartmentContext';
-import { Plus, Edit, Trash2, Save, X } from 'lucide-react';
+import { Plus, Edit, Trash2, Save, X, AlertTriangle } from 'lucide-react';
+import { DataTable } from './DataTable';
+import { HelpPopover } from './HelpPopover';
+import { DEFAULT_SLOTS, ScheduleSlot } from '../utils/schedule';
+import { validateWindows } from '../utils/validation';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const slugify = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+const emptyForm = (departmentId: string) => ({
+  id: '',
+  name: '',
+  type: 'lecture' as 'lecture' | 'lab' | 'seminar',
+  capacity: 60 as number | '',
+  equipment: [] as string[],
+  department_id: departmentId,
+  shared_with_departments: [] as string[],
+  availability: [] as Array<{ day: string; start: string; end: string }>
+});
 
 export function RoomForm() {
   const { departmentId } = useDepartment();
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [equipmentCatalog, setEquipmentCatalog] = useState<Equipment[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [scheduleSlots, setScheduleSlots] = useState<ScheduleSlot[]>(DEFAULT_SLOTS);
   const [showForm, setShowForm] = useState(false);
   const [editingRoom, setEditingRoom] = useState<Room | null>(null);
-  const [formData, setFormData] = useState({
-    id: '',
-    name: '',
-    type: 'lecture' as 'lecture' | 'lab' | 'seminar',
-    capacity: 60 as number | '',
-    equipment: [] as string[],
-    department_id: '' as string,
-    shared_with_departments: [] as string[],
-    availability: [] as Array<{ day: string; start: string; end: string }>
-  });
+  const [formData, setFormData] = useState(emptyForm(''));
+  const [error, setError] = useState('');
+
+  const availabilityIssues = validateWindows(formData.availability, scheduleSlots);
+  const blockingIssues = availabilityIssues.filter((i) => i.severity === 'error');
 
   useEffect(() => {
     fetchRooms();
+    fetchEquipment();
+    departmentsApi.list().then((res) => setDepartments(res.data)).catch(() => setDepartments([]));
+    constraintsApi.listTimeSlots().then((res) => setScheduleSlots(res.data.length ? res.data : DEFAULT_SLOTS)).catch(() => {});
   }, []);
 
   const fetchRooms = async () => {
@@ -35,8 +52,34 @@ export function RoomForm() {
     }
   };
 
+  const fetchEquipment = async () => {
+    try {
+      const response = await equipmentApi.list();
+      setEquipmentCatalog(response.data);
+    } catch (error) {
+      console.error('Failed to fetch equipment:', error);
+    }
+  };
+
+  const addEquipment = async (name: string) => {
+    const id = slugify(name);
+    if (!id || equipmentCatalog.some((e) => e.id === id)) return id;
+    try {
+      const response = await equipmentApi.create({ id, name: name.trim() });
+      setEquipmentCatalog([...equipmentCatalog, response.data]);
+    } catch (error) {
+      console.error('Failed to add equipment:', error);
+    }
+    return id;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
+    if (blockingIssues.length > 0) {
+      setError(blockingIssues[0].message);
+      return;
+    }
     try {
       if (editingRoom) {
         await roomsApi.update(editingRoom.id, formData);
@@ -45,13 +88,10 @@ export function RoomForm() {
       }
       setShowForm(false);
       setEditingRoom(null);
-      setFormData({
-        id: '', name: '', type: 'lecture', capacity: 60,
-        equipment: [], department_id: departmentId || '', shared_with_departments: [], availability: []
-      });
+      setFormData(emptyForm(departmentId || ''));
       fetchRooms();
-    } catch (error) {
-      console.error('Failed to save room:', error);
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'Could not save this room.');
     }
   };
 
@@ -81,6 +121,15 @@ export function RoomForm() {
     }
   };
 
+  const toggleShared = (deptId: string) => {
+    setFormData((current) => ({
+      ...current,
+      shared_with_departments: current.shared_with_departments.includes(deptId)
+        ? current.shared_with_departments.filter((id) => id !== deptId)
+        : [...current.shared_with_departments, deptId],
+    }));
+  };
+
   return (
     <div>
       <div className="flex justify-between items-center mb-4">
@@ -89,10 +138,7 @@ export function RoomForm() {
           onClick={() => {
             setShowForm(true);
             setEditingRoom(null);
-            setFormData({
-              id: '', name: '', type: 'lecture', capacity: 60,
-              equipment: [], department_id: departmentId || '', shared_with_departments: [], availability: []
-            });
+            setFormData(emptyForm(departmentId || ''));
           }}
           className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
         >
@@ -100,6 +146,8 @@ export function RoomForm() {
           Add Room
         </button>
       </div>
+
+      {error && <p className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">{error}</p>}
 
       {showForm && (
         <div className="mb-6 p-4 border border-gray-200 rounded-lg bg-gray-50">
@@ -113,6 +161,7 @@ export function RoomForm() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 placeholder="e.g., lh101"
                 required
+                disabled={!!editingRoom}
               />
             </div>
             <div>
@@ -152,28 +201,70 @@ export function RoomForm() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Equipment (comma-separated)</label>
-              <input
-                type="text"
-                value={formData.equipment.join(', ')}
-                onChange={(e) => setFormData({ ...formData, equipment: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+              <label className="block text-sm font-medium text-gray-700 mb-1">Owning department</label>
+              <select
+                value={formData.department_id}
+                onChange={(e) => setFormData({ ...formData, department_id: e.target.value })}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="e.g., computers, projector"
-              />
+              >
+                <option value="">Shared / institution-wide</option>
+                {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+              <div className="mt-1"><HelpPopover>Leave this as "Shared" for central lecture halls or labs any department can book. Pick a department for a room that belongs to it - other departments can still use it if you lend it below.</HelpPopover></div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Shared Departments (comma-separated)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Also lent to</label>
+              <div className="flex flex-wrap gap-2">
+                {departments.filter((d) => d.id !== formData.department_id).map((d) => {
+                  const selected = formData.shared_with_departments.includes(d.id);
+                  return (
+                    <button
+                      key={d.id} type="button" onClick={() => toggleShared(d.id)}
+                      className={`px-2 py-1 text-xs rounded-full border ${selected ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300'}`}
+                    >
+                      {d.name}
+                    </button>
+                  );
+                })}
+                {departments.length <= 1 && <p className="text-xs text-gray-400">Add another department to lend this room to it.</p>}
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Equipment</label>
+              <div className="flex flex-wrap gap-2 mb-2">
+                {equipmentCatalog.map((eq) => {
+                  const selected = formData.equipment.includes(eq.id);
+                  return (
+                    <button
+                      key={eq.id} type="button"
+                      onClick={() => setFormData({
+                        ...formData,
+                        equipment: selected ? formData.equipment.filter((id) => id !== eq.id) : [...formData.equipment, eq.id],
+                      })}
+                      className={`px-2 py-1 text-xs rounded-full border ${selected ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300'}`}
+                    >
+                      {eq.name}
+                    </button>
+                  );
+                })}
+              </div>
               <input
-                type="text"
-                value={formData.shared_with_departments.join(', ')}
-                onChange={(e) => setFormData({ ...formData, shared_with_departments: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="e.g., CSE, IT"
+                type="text" placeholder="Add new equipment and press Enter"
+                className="w-full px-2 py-1 text-sm border border-gray-300 rounded"
+                onKeyDown={async (e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const input = e.currentTarget;
+                    const id = await addEquipment(input.value);
+                    if (id) setFormData((prev) => ({ ...prev, equipment: [...prev.equipment, id] }));
+                    input.value = '';
+                  }
+                }}
               />
             </div>
-            
+
             {/* Room Availability */}
-            <div>
+            <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-1">Availability</label>
               <div className="space-y-2">
                 {formData.availability.map((slot, index) => (
@@ -234,13 +325,25 @@ export function RoomForm() {
                 >
                   + Add Availability Slot
                 </button>
+                {formData.availability.length > 0 && (
+                  <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                    Adding a window means the room may ONLY be used then - it becomes unavailable at every other time.
+                  </p>
+                )}
+                {availabilityIssues.map((issue, i) => (
+                  <p key={i} className={`text-xs flex items-center gap-1 ${issue.severity === 'error' ? 'text-red-600' : 'text-amber-600'}`}>
+                    <AlertTriangle size={12} /> {issue.message}
+                  </p>
+                ))}
               </div>
             </div>
-            
+
             <div className="md:col-span-2 flex gap-2">
               <button
                 type="submit"
-                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                disabled={blockingIssues.length > 0}
+                title={blockingIssues.length > 0 ? blockingIssues[0].message : undefined}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 <Save size={20} />
                 {editingRoom ? 'Update' : 'Save'}
@@ -261,51 +364,35 @@ export function RoomForm() {
         </div>
       )}
 
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="bg-gray-100">
-              <th className="text-left px-4 py-2 font-medium text-gray-700">ID</th>
-              <th className="text-left px-4 py-2 font-medium text-gray-700">Name</th>
-              <th className="text-left px-4 py-2 font-medium text-gray-700">Type</th>
-              <th className="text-left px-4 py-2 font-medium text-gray-700">Capacity</th>
-              <th className="text-left px-4 py-2 font-medium text-gray-700">Equipment</th>
-              <th className="text-right px-4 py-2 font-medium text-gray-700">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rooms.map((room) => (
-              <tr key={room.id} className="border-b border-gray-200">
-                <td className="px-4 py-2">{room.id}</td>
-                <td className="px-4 py-2">{room.name}</td>
-                <td className="px-4 py-2 capitalize">{room.type}</td>
-                <td className="px-4 py-2">{room.capacity}</td>
-                <td className="px-4 py-2">{room.equipment?.join(', ') || '-'}</td>
-                <td className="px-4 py-2 text-right">
-                  <button
-                    onClick={() => handleEdit(room)}
-                    className="p-1 text-blue-600 hover:bg-blue-100 rounded"
-                  >
-                    <Edit size={16} />
-                  </button>
-                  <button
-                    onClick={() => handleDelete(room.id)}
-                    className="p-1 text-red-600 hover:bg-red-100 rounded"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {rooms.length === 0 && (
-        <div className="text-center py-8 text-gray-500">
-          No rooms defined yet. Click "Add Room" to get started.
-        </div>
-      )}
+      <DataTable
+        storageKey="rooms"
+        rows={rooms}
+        getRowId={(r) => r.id}
+        emptyMessage='No rooms defined yet. Click "Add Room" to get started.'
+        searchPlaceholder="Search rooms"
+        columns={[
+          { key: 'id', header: 'ID', render: (r) => r.id },
+          { key: 'name', header: 'Name', render: (r) => r.name },
+          { key: 'type', header: 'Type', render: (r) => <span className="capitalize">{r.type}</span> },
+          { key: 'capacity', header: 'Capacity', render: (r) => String(r.capacity) },
+          {
+            key: 'equipment', header: 'Equipment',
+            render: (r) => (r.equipment || []).map((id) => equipmentCatalog.find((e) => e.id === id)?.name || id).join(', ') || '-',
+          },
+          { key: 'department', header: 'Department', render: (r) => departments.find((d) => d.id === r.department_id)?.name || 'Shared', defaultVisible: false },
+          {
+            key: 'shared', header: 'Shared with', defaultVisible: false,
+            render: (r) => (r.shared_with_departments || []).map((id) => departments.find((d) => d.id === id)?.name || id).join(', ') || '-',
+          },
+          { key: 'availability', header: 'Availability', render: (r) => (r.availability?.length ? `${r.availability.length} window(s)` : 'Always'), defaultVisible: false },
+        ]}
+        actions={(room) => (
+          <>
+            <button onClick={() => handleEdit(room)} className="p-1 text-blue-600 hover:bg-blue-100 rounded"><Edit size={16} /></button>
+            <button onClick={() => handleDelete(room.id)} className="p-1 text-red-600 hover:bg-red-100 rounded"><Trash2 size={16} /></button>
+          </>
+        )}
+      />
     </div>
   );
 }

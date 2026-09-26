@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 
 
 class ElectiveGroupBase(BaseModel):
@@ -24,6 +24,10 @@ class ElectiveGroupResponse(ElectiveGroupBase):
 class ElectivePreflightIssue(BaseModel):
     severity: str  # blocking | warning
     message: str
+    # What's actually short - lets the UI offer the specific fix (add a
+    # room, offer fewer options, let them run at different times) instead
+    # of one paragraph the admin has to parse themselves.
+    kind: Optional[str] = None  # rooms | teachers
 
 
 class ElectivePreflightResponse(BaseModel):
