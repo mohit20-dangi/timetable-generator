@@ -30,6 +30,23 @@ def assemble_constraints(db: Database, profile_id: Optional[str] = None) -> dict
         for s in sections
     }
 
+    section_electives: dict = {}
+    for s in sections:
+        groups: dict = {}
+        for link in s.get("subjects", []):
+            if link.get("is_elective") and link.get("elective_group_id"):
+                groups.setdefault(link["elective_group_id"], []).append(link["subject_id"])
+        if groups:
+            section_electives[s["_id"]] = groups
+
+    # Lab subjects whose batches are opted into running at the exact same slot as
+    # their siblings, instead of the default of each batch picking its own day/time.
+    section_batch_sync: dict = {}
+    for s in sections:
+        synced = {link["subject_id"] for link in s.get("subjects", []) if link.get("batches_simultaneous")}
+        if synced:
+            section_batch_sync[s["_id"]] = synced
+
     lab_batches = [
         {"id": b["id"], "section_id": s["_id"], "batch_name": b["batch_name"], "strength": b["strength"]}
         for s in sections
@@ -102,6 +119,8 @@ def assemble_constraints(db: Database, profile_id: Optional[str] = None) -> dict
             for ts in time_slots
         ],
         "section_subjects": section_subj_map,
+        "section_electives": section_electives,
+        "section_batch_sync": section_batch_sync,
         "lab_batches": lab_batches,
         "prerequisites": prerequisites,
         "soft_constraint_weights": profile.get("soft_constraint_weights", {}) if profile else {},

@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     NVIDIA_API_KEY: Optional[str] = None
     NVIDIA_BASE_URL: str = "https://integrate.api.nvidia.com/v1"
-    NVIDIA_MODEL: str = "meta/llama-3.1-70b-instruct"
+    NVIDIA_MODEL: str = "openai/gpt-oss-20b"
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
     class Config:

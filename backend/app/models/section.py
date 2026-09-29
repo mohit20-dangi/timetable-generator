@@ -6,6 +6,10 @@ class SectionSubjectLink(BaseModel):
     subject_id: str
     is_elective: bool = False
     elective_group_id: Optional[str] = None
+    # Only meaningful for lab subjects in a section that has lab batches defined.
+    # False (default): each batch picks its own day/slot independently. True: every
+    # batch must run this lab at the exact same slot (e.g. shared invigilation needs).
+    batches_simultaneous: bool = False
 
 
 class LabBatch(BaseModel):
@@ -30,6 +34,7 @@ class SectionSubjectAdd(BaseModel):
     subject_id: str
     is_elective: bool = False
     elective_group_id: Optional[str] = None
+    batches_simultaneous: bool = False
 
 
 class LabBatchCreate(BaseModel):

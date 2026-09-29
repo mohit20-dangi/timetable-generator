@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { timetableApi, sectionsApi, subjectsApi, teachersApi, roomsApi } from '../api/client';
+import { timetableApi, sectionsApi, subjectsApi, teachersApi, roomsApi, NLEditPreview } from '../api/client';
 import { TimetableEntry, Section, Subject, Teacher, Room } from '../types';
-import { ChevronLeft, Download, Users, BookOpen, MapPin } from 'lucide-react';
+import { ChevronLeft, Download, Users, BookOpen, MapPin, Sparkles, Check, AlertTriangle } from 'lucide-react';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const PERIODS = [1, 2, 3, 4, 5, 6, 7, 8];
@@ -17,6 +17,13 @@ export function TimetableViewer() {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'section' | 'teacher' | 'room'>('section');
   const [selectedEntity, setSelectedEntity] = useState<string>('');
+
+  const [editOpen, setEditOpen] = useState(false);
+  const [instruction, setInstruction] = useState('');
+  const [previewing, setPreviewing] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [preview, setPreview] = useState<NLEditPreview | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -76,6 +83,15 @@ export function TimetableViewer() {
     return rooms[roomId]?.name || roomId;
   };
 
+  const getBatchName = (batchId: string | null) => {
+    if (!batchId) return null;
+    for (const section of Object.values(sections)) {
+      const batch = section.lab_batches.find((b) => b.id === batchId);
+      if (batch) return batch.batch_name;
+    }
+    return batchId;
+  };
+
   const getSubjectColor = (type: string) => {
     switch (type) {
       case 'theory':
@@ -89,10 +105,18 @@ export function TimetableViewer() {
     }
   };
 
+  const getBatchSectionId = (batchId: string | null) => {
+    if (!batchId) return null;
+    for (const section of Object.values(sections)) {
+      if (section.lab_batches.some((b) => b.id === batchId)) return section.id;
+    }
+    return null;
+  };
+
   const getEntriesForEntity = (entityId: string) => {
     return entries.filter(entry => {
       if (viewMode === 'section') {
-        return entry.section_id === entityId || entry.batch_id === entityId;
+        return entry.section_id === entityId || getBatchSectionId(entry.batch_id) === entityId;
       } else if (viewMode === 'teacher') {
         return entry.teacher_id === entityId;
       } else {
@@ -124,6 +148,38 @@ export function TimetableViewer() {
       window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Export failed:', error);
+    }
+  };
+
+  const handlePreviewEdit = async () => {
+    if (!instruction.trim()) return;
+    setPreviewing(true);
+    setEditError(null);
+    setPreview(null);
+    try {
+      const response = await timetableApi.previewEdit(parseInt(runId!), instruction);
+      setPreview(response.data);
+    } catch (error: any) {
+      setEditError(error.response?.data?.detail || 'Failed to parse the instruction');
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  const handleApplyEdit = async () => {
+    if (!preview || !preview.applicable) return;
+    setApplying(true);
+    setEditError(null);
+    try {
+      const response = await timetableApi.applyEdit(parseInt(runId!), preview.resolved_operations);
+      setEntries(response.data.entries);
+      setPreview(null);
+      setInstruction('');
+    } catch (error: any) {
+      const detail = error.response?.data?.detail;
+      setEditError(typeof detail === 'string' ? detail : detail?.message || 'Failed to apply the edit');
+    } finally {
+      setApplying(false);
     }
   };
 
@@ -162,8 +218,104 @@ export function TimetableViewer() {
             <Download size={20} />
             Export PDF
           </button>
+          <button
+            onClick={() => setEditOpen(!editOpen)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+              editOpen ? 'bg-purple-700 text-white' : 'bg-purple-600 text-white hover:bg-purple-700'
+            }`}
+          >
+            <Sparkles size={20} />
+            Edit with AI
+          </button>
         </div>
       </div>
+
+      {/* Natural-language edit panel */}
+      {editOpen && (
+        <div className="mb-6 p-4 border border-purple-200 rounded-lg bg-purple-50">
+          <h3 className="font-medium text-gray-800 mb-2 flex items-center gap-2">
+            <Sparkles size={18} className="text-purple-600" />
+            Describe the change you want
+          </h3>
+          <p className="text-sm text-gray-600 mb-3">
+            e.g. "Move Prof Sharma's Data Structures class on Monday to Wednesday period 5" or
+            "Swap the rooms for CSE-A and CSE-B on Tuesday period 3". Changes are previewed first -
+            nothing is applied until you confirm.
+          </p>
+          <div className="flex gap-2 mb-3">
+            <input
+              type="text"
+              value={instruction}
+              onChange={(e) => setInstruction(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handlePreviewEdit()}
+              placeholder="Describe the change..."
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+              disabled={previewing || applying}
+            />
+            <button
+              onClick={handlePreviewEdit}
+              disabled={previewing || applying || !instruction.trim()}
+              className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors"
+            >
+              {previewing ? 'Thinking...' : 'Preview'}
+            </button>
+          </div>
+
+          {editError && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 mb-3">
+              {editError}
+            </div>
+          )}
+
+          {preview && (
+            <div className="space-y-3">
+              <p className="text-sm text-gray-700 italic">{preview.explanation}</p>
+
+              {preview.parse_errors.length > 0 && (
+                <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                  <p className="text-sm font-medium text-yellow-800 mb-1 flex items-center gap-1">
+                    <AlertTriangle size={16} /> Couldn't resolve part of this instruction:
+                  </p>
+                  <ul className="text-sm text-yellow-700 list-disc list-inside">
+                    {preview.parse_errors.map((e, i) => <li key={i}>{e}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              {preview.resolved_operations.length > 0 && (
+                <div className="p-3 bg-white border border-gray-200 rounded-lg">
+                  <p className="text-sm font-medium text-gray-700 mb-1">Proposed changes:</p>
+                  <ul className="text-sm text-gray-700 list-disc list-inside">
+                    {preview.resolved_operations.map((op, i) => <li key={i}>{op.description}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              {preview.conflicts.length > 0 && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                  <p className="text-sm font-medium text-red-800 mb-1 flex items-center gap-1">
+                    <AlertTriangle size={16} /> This would create conflicts - not applied:
+                  </p>
+                  <ul className="text-sm text-red-700 list-disc list-inside">
+                    {preview.conflicts.map((c, i) => <li key={i}>{c}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              {preview.applicable && (
+                <button
+                  onClick={handleApplyEdit}
+                  disabled={applying}
+                  className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+                >
+                  <Check size={18} />
+                  {applying ? 'Applying...' : 'Apply Change'}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* View mode selector */}
       <div className="flex gap-2 mb-6">
@@ -234,16 +386,26 @@ export function TimetableViewer() {
               <tr key={period} className="border-b border-gray-200">
                 <td className="px-4 py-2 font-medium text-gray-600">Period {period}</td>
                 {DAYS.map((day) => {
-                  const entry = entityEntries.find(
+                  // A section with independently-scheduled lab batches (or an
+                  // elective group) can have more than one entry land on the
+                  // exact same day/period - show every one, not just the first.
+                  const cellEntries = entityEntries.filter(
                     e => e.day === day && e.period === period
                   );
                   return (
                     <td key={`${day}-${period}`} className="p-1 border border-gray-100 min-h-[60px]">
-                      {entry ? (
-                        <div className={`p-2 rounded border text-xs ${getSubjectColor(getSubjectType(entry.subject_id))}`}>
-                          <div className="font-medium">{getSubjectName(entry.subject_id)}</div>
-                          <div className="text-gray-600">{getTeacherName(entry.teacher_id)}</div>
-                          <div className="text-gray-600">{getRoomName(entry.room_id)}</div>
+                      {cellEntries.length > 0 ? (
+                        <div className="space-y-1">
+                          {cellEntries.map((entry, i) => (
+                            <div key={i} className={`p-2 rounded border text-xs ${getSubjectColor(getSubjectType(entry.subject_id))}`}>
+                              <div className="font-medium">{getSubjectName(entry.subject_id)}</div>
+                              <div className="text-gray-600">{getTeacherName(entry.teacher_id)}</div>
+                              <div className="text-gray-600">{getRoomName(entry.room_id)}</div>
+                              {entry.batch_id && (
+                                <div className="text-gray-500 italic">{getBatchName(entry.batch_id)}</div>
+                              )}
+                            </div>
+                          ))}
                         </div>
                       ) : (
                         <div className="h-full flex items-center justify-center text-gray-300 text-xs">

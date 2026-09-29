@@ -21,7 +21,7 @@ def _repo(db: Database) -> Repository:
     return Repository(db, "teachers")
 
 
-@router.post("/", response_model=TeacherResponse)
+@router.post("", response_model=TeacherResponse)
 def create_teacher(
     teacher: TeacherCreate,
     db: Database = Depends(get_database),
@@ -33,7 +33,7 @@ def create_teacher(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Teacher with this ID already exists")
 
 
-@router.get("/", response_model=List[TeacherResponse])
+@router.get("", response_model=List[TeacherResponse])
 def list_teachers(
     db: Database = Depends(get_database),
     _admin: dict = Depends(get_current_admin),

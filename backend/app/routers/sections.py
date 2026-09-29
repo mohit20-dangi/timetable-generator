@@ -16,7 +16,7 @@ def _repo(db: Database) -> Repository:
     return Repository(db, "sections")
 
 
-@router.post("/", response_model=SectionResponse)
+@router.post("", response_model=SectionResponse)
 def create_section(
     section: SectionCreate,
     db: Database = Depends(get_database),
@@ -31,7 +31,7 @@ def create_section(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Section with this ID already exists")
 
 
-@router.get("/", response_model=List[SectionResponse])
+@router.get("", response_model=List[SectionResponse])
 def list_sections(
     db: Database = Depends(get_database),
     _admin: dict = Depends(get_current_admin),
@@ -89,6 +89,20 @@ def get_sections_by_year(
     _admin: dict = Depends(get_current_admin),
 ):
     return _repo(db).list_all({"year_id": year_id})
+
+
+@router.put("/{section_id}", response_model=SectionResponse)
+def update_section(
+    section_id: str,
+    section: SectionCreate,
+    db: Database = Depends(get_database),
+    _admin: dict = Depends(get_current_admin),
+):
+    if not _repo(db).exists(section_id):
+        raise HTTPException(status_code=404, detail="Section not found")
+    patch = section.model_dump()
+    patch.pop("id", None)
+    return _repo(db).update(section_id, patch)
 
 
 @router.delete("/{section_id}")

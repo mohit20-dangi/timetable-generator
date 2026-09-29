@@ -16,7 +16,7 @@ def _repo(db: Database) -> Repository:
     return Repository(db, "rooms")
 
 
-@router.post("/", response_model=RoomResponse)
+@router.post("", response_model=RoomResponse)
 def create_room(
     room: RoomCreate,
     db: Database = Depends(get_database),
@@ -28,7 +28,7 @@ def create_room(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Room with this ID already exists")
 
 
-@router.get("/", response_model=List[RoomResponse])
+@router.get("", response_model=List[RoomResponse])
 def list_rooms(
     db: Database = Depends(get_database),
     _admin: dict = Depends(get_current_admin),

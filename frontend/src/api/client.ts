@@ -56,6 +56,7 @@ export const yearsApi = {
 export const sectionsApi = {
   list: () => api.get('/sections'),
   create: (data: any) => api.post('/sections', data),
+  update: (id: string, data: any) => api.put(`/sections/${id}`, data),
   get: (id: string) => api.get(`/sections/${id}`),
   getByYear: (yearId: string) => api.get(`/sections/year/${yearId}`),
   delete: (id: string) => api.delete(`/sections/${id}`),
@@ -72,6 +73,7 @@ export const sectionsApi = {
 export const subjectsApi = {
   list: () => api.get('/subjects'),
   create: (data: any) => api.post('/subjects', data),
+  update: (id: string, data: any) => api.put(`/subjects/${id}`, data),
   get: (id: string) => api.get(`/subjects/${id}`),
   delete: (id: string) => api.delete(`/subjects/${id}`),
 
@@ -121,7 +123,27 @@ export const timetableApi = {
   getEntries: (runId: number) => api.get(`/timetable/runs/${runId}/entries`),
   explain: (runId: number) => api.get(`/timetable/runs/${runId}/explain`),
   export: (runId: number, format: string) => api.get(`/timetable/runs/${runId}/export`, { params: { format }, responseType: 'blob' }),
+
+  previewEdit: (runId: number, instruction: string) =>
+    api.post(`/timetable/runs/${runId}/edit-nl/preview`, { instruction }),
+  applyEdit: (runId: number, resolvedOperations: ResolvedOperation[]) =>
+    api.post(`/timetable/runs/${runId}/edit-nl/apply`, resolvedOperations),
 };
+
+export interface ResolvedOperation {
+  entry_index: number;
+  field_changes: Record<string, any>;
+  delete: boolean;
+  description: string;
+}
+
+export interface NLEditPreview {
+  explanation: string;
+  resolved_operations: ResolvedOperation[];
+  parse_errors: string[];
+  conflicts: string[];
+  applicable: boolean;
+}
 
 // No-auth endpoints meant for the public college-website integration.
 export const publicApi = {

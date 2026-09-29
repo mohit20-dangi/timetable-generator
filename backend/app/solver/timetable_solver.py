@@ -89,6 +89,13 @@ class TimetableSolver:
 
         self._build_time_grid()
 
+        # Sections that have lab batches defined run their lab subjects entirely
+        # through those batches - the whole-section variables below are skipped
+        # for lab subjects in that case, so a lab isn't double-represented as both
+        # "the whole class together" and "each batch separately".
+        self.lab_batches = self.constraints.get("lab_batches", [])
+        sections_with_batches = {b["section_id"] for b in self.lab_batches}
+
         # Create assignment variables: assign[section_id][subject_id][teacher_id][room_id][slot_id] = 0/1
         for section in self.sections:
             section_id = section["id"]
@@ -99,6 +106,8 @@ class TimetableSolver:
             for subject_id in section_subjects:
                 subject = self.subject_map.get(subject_id)
                 if not subject:
+                    continue
+                if subject.get("type") == "lab" and section_id in sections_with_batches:
                     continue
 
                 self.variables[section_id][subject_id] = {}
@@ -129,7 +138,6 @@ class TimetableSolver:
                                 self.model.NewBoolVar(var_name)
 
         # Handle lab batches
-        self.lab_batches = self.constraints.get("lab_batches", [])
         for batch in self.lab_batches:
             batch_id = batch["id"]
             self.variables[batch_id] = {}
@@ -188,6 +196,7 @@ class TimetableSolver:
     def _add_hard_constraints(self):
         """Add all hard constraints to the model."""
         self._no_section_double_booking()
+        self._no_batch_double_booking()
         self._no_teacher_double_booking()
         self._no_room_double_booking()
         self._weekly_hours_constraint()
@@ -197,21 +206,65 @@ class TimetableSolver:
         self._continuous_block_constraint()
         self._prerequisite_constraint()
         self._lab_batch_simultaneous_constraint()
+        self._elective_group_constraint()
 
     def _no_section_double_booking(self):
-        """A section cannot have two classes at the same time."""
+        """A section cannot attend two different classes at the same time -
+        except subjects that are electives in the same group, which are
+        alternative options for the same period (a student attends only one),
+        not an actual conflict for the section as a whole."""
+        section_electives = self.constraints.get("section_electives", {})
+
         for section in self.sections:
             section_id = section["id"]
             if section_id not in self.variables:
                 continue
+
+            subject_to_key = {}
+            for group_id, subject_ids in section_electives.get(section_id, {}).items():
+                for subject_id in subject_ids:
+                    subject_to_key[subject_id] = f"group:{group_id}"
+
             for slot in self.time_slots:
-                slot_vars = []
+                slot_id = slot["slot_id"]
+                vars_by_key: Dict[str, List[Any]] = defaultdict(list)
                 for subject_id, teachers in self.variables[section_id].items():
-                    for teacher_id, rooms in teachers.items():
-                        for room_id, slot_vars_dict in rooms.items():
-                            if slot["slot_id"] in slot_vars_dict:
-                                slot_vars.append(slot_vars_dict[slot["slot_id"]])
-                if slot_vars:
+                    key = subject_to_key.get(subject_id, f"subject:{subject_id}")
+                    for rooms in teachers.values():
+                        for slot_vars_dict in rooms.values():
+                            if slot_id in slot_vars_dict:
+                                vars_by_key[key].append(slot_vars_dict[slot_id])
+
+                occupied_indicators = []
+                for key, vlist in vars_by_key.items():
+                    if len(vlist) == 1:
+                        occupied_indicators.append(vlist[0])
+                    else:
+                        indicator = self.model.NewBoolVar(f"occupied_{section_id}_{slot_id}_{key}")
+                        self.model.AddMaxEquality(indicator, vlist)
+                        occupied_indicators.append(indicator)
+
+                if occupied_indicators:
+                    self.model.Add(sum(occupied_indicators) <= 1)
+
+    def _no_batch_double_booking(self):
+        """A lab batch cannot attend two different lab subjects at the same time
+        (relevant once a section has more than one batched lab subject)."""
+        for batch in self.lab_batches:
+            batch_id = batch["id"]
+            if batch_id not in self.variables:
+                continue
+
+            for slot in self.time_slots:
+                slot_id = slot["slot_id"]
+                slot_vars = []
+                for teachers in self.variables[batch_id].values():
+                    for rooms in teachers.values():
+                        for slot_vars_dict in rooms.values():
+                            if slot_id in slot_vars_dict:
+                                slot_vars.append(slot_vars_dict[slot_id])
+
+                if len(slot_vars) > 1:
                     self.model.Add(sum(slot_vars) <= 1)
 
     def _no_teacher_double_booking(self):
@@ -370,66 +423,87 @@ class TimetableSolver:
     def _continuous_block_constraint(self):
         """Subjects needing continuous blocks must get back-to-back periods.
 
-        For each day, a given (section, subject, teacher, room) combo is either
+        For each day, a given (entity, subject, teacher, room) combo is either
         completely unused that day, or used for exactly one contiguous run of
-        `block_size` periods - never scattered single periods. Across the week,
-        exactly `num_blocks` days must be used this way.
+        `block_size` periods - never scattered single periods, and never split
+        across a room/teacher change partway through. Across the week and
+        across every eligible combo, exactly `num_blocks` days must be used
+        this way, with at most one combo actually used on any given day (an
+        earlier version summed occupancy across combos before checking
+        contiguity, which let a single "block" silently switch rooms or
+        teachers halfway through; a version before that required every
+        eligible combo to *independently* satisfy `== num_blocks`, which was
+        infeasible whenever more than one teacher or room qualified, since the
+        class obviously can't be taught in every qualifying room at once).
         """
         for section in self.sections:
-            section_id = section["id"]
-            if section_id not in self.variables:
+            self._continuous_block_for_entity(section["id"])
+        for batch in self.lab_batches:
+            self._continuous_block_for_entity(batch["id"])
+
+    def _continuous_block_for_entity(self, entity_id: str):
+        """Apply the continuous-block requirement for every qualifying subject
+        of one schedulable entity (a section or a lab batch)."""
+        if entity_id not in self.variables:
+            return
+        for subject_id, teachers in self.variables[entity_id].items():
+            subject = self.subject_map.get(subject_id)
+            if not subject or not subject.get("needs_continuous_block", False):
                 continue
-            for subject_id, teachers in self.variables[section_id].items():
-                subject = self.subject_map.get(subject_id)
-                if not subject or not subject.get("needs_continuous_block", False):
-                    continue
 
-                block_size = max(subject.get("block_size", 2), 1)
-                weekly_hours = subject.get("weekly_hours", 0)
-                num_blocks = weekly_hours // block_size
+            block_size = max(subject.get("block_size", 2), 1)
+            weekly_hours = subject.get("weekly_hours", 0)
+            num_blocks = weekly_hours // block_size
 
-                if num_blocks == 0:
-                    continue
+            if num_blocks == 0:
+                continue
 
-                for teacher_id, rooms in teachers.items():
-                    for room_id, slot_vars in rooms.items():
-                        has_block_today_vars = []
+            all_has_block_vars = []
+            has_block_by_day: Dict[str, List[Any]] = defaultdict(list)
 
-                        for day in self.days:
-                            day_slots = sorted(
-                                [s for s in self.time_slots if s["day"] == day],
-                                key=lambda x: x["period"],
+            for teacher_id, rooms in teachers.items():
+                for room_id, slot_vars in rooms.items():
+                    for day in self.days:
+                        day_slots = sorted(
+                            [s for s in self.time_slots if s["slot_id"] in slot_vars and s["day"] == day],
+                            key=lambda x: x["period"],
+                        )
+                        if not day_slots:
+                            continue
+                        day_slot_vars = [slot_vars[s["slot_id"]] for s in day_slots]
+
+                        block_vars_today = []
+                        for i in range(len(day_slots) - block_size + 1):
+                            block_slot_vars = [slot_vars[s["slot_id"]] for s in day_slots[i:i + block_size]]
+                            block_var = self.model.NewBoolVar(
+                                f"block_{entity_id}_{subject_id}_{teacher_id}_{room_id}_{day}_{i}"
                             )
-                            day_slot_vars = [slot_vars[s["slot_id"]] for s in day_slots if s["slot_id"] in slot_vars]
-                            if not day_slot_vars:
-                                continue
+                            self.model.Add(sum(block_slot_vars) == block_size).OnlyEnforceIf(block_var)
+                            self.model.Add(sum(block_slot_vars) < block_size).OnlyEnforceIf(block_var.Not())
+                            block_vars_today.append(block_var)
 
-                            block_vars_today = []
-                            for i in range(len(day_slots) - block_size + 1):
-                                block_slots = day_slots[i:i + block_size]
-                                block_slot_vars = [slot_vars.get(s["slot_id"]) for s in block_slots]
-                                if any(v is None for v in block_slot_vars):
-                                    continue
-                                block_var = self.model.NewBoolVar(
-                                    f"block_{section_id}_{subject_id}_{teacher_id}_{room_id}_{day}_{i}"
-                                )
-                                self.model.Add(sum(block_slot_vars) == block_size).OnlyEnforceIf(block_var)
-                                self.model.Add(sum(block_slot_vars) < block_size).OnlyEnforceIf(block_var.Not())
-                                block_vars_today.append(block_var)
+                        has_block_today = self.model.NewBoolVar(
+                            f"hasblock_{entity_id}_{subject_id}_{teacher_id}_{room_id}_{day}"
+                        )
+                        # Used today implies exactly one contiguous block in this combo
+                        # (no scattered periods, no mid-block room/teacher switch).
+                        self.model.Add(sum(day_slot_vars) == block_size * has_block_today)
+                        if block_vars_today:
+                            self.model.Add(sum(block_vars_today) == has_block_today)
+                        else:
+                            self.model.Add(has_block_today == 0)
 
-                            has_block_today = self.model.NewBoolVar(
-                                f"hasblock_{section_id}_{subject_id}_{teacher_id}_{room_id}_{day}"
-                            )
-                            # Used today implies exactly one contiguous block (no scattered periods).
-                            self.model.Add(sum(day_slot_vars) == block_size * has_block_today)
-                            if block_vars_today:
-                                self.model.Add(sum(block_vars_today) == has_block_today)
-                            else:
-                                self.model.Add(has_block_today == 0)
-                            has_block_today_vars.append(has_block_today)
+                        all_has_block_vars.append(has_block_today)
+                        has_block_by_day[day].append(has_block_today)
 
-                        if has_block_today_vars:
-                            self.model.Add(sum(has_block_today_vars) == num_blocks)
+            # Only one combo may supply that day's block (otherwise two different
+            # teacher/room pairs could each claim a same-day block at different times).
+            for vars_today in has_block_by_day.values():
+                if len(vars_today) > 1:
+                    self.model.Add(sum(vars_today) <= 1)
+
+            if all_has_block_vars:
+                self.model.Add(sum(all_has_block_vars) == num_blocks)
 
     def _prerequisite_constraint(self):
         """Every scheduled occurrence of a prerequisite subject must come
@@ -463,11 +537,21 @@ class TimetableSolver:
                             self.model.AddBoolOr([req_var.Not(), dep_var.Not()])
 
     def _lab_batch_simultaneous_constraint(self):
-        """Lab batches belonging to the same section run their lab subjects in
-        parallel: every batch must be in class at exactly the same slots as its
-        sibling batches (different rooms/teachers is fine, different time is not).
+        """By default every batch picks its own day/slot independently - the
+        constraints elsewhere (weekly hours, no double-booking, continuous
+        block) already apply per-batch, same as they would for a section.
+        This only forces synchronized scheduling for subjects explicitly opted
+        in via `batches_simultaneous` on the section-subject link (e.g. when
+        every batch needs to run at the exact same slot for shared
+        invigilation) - every opted-in batch must be in class at exactly the
+        same slots as its siblings (different rooms/teachers is fine,
+        different time is not).
         """
         if not self.lab_batches or len(self.lab_batches) < 2:
+            return
+
+        section_batch_sync = self.constraints.get("section_batch_sync", {})
+        if not section_batch_sync:
             return
 
         groups: Dict[str, List[str]] = defaultdict(list)
@@ -478,8 +562,8 @@ class TimetableSolver:
             if len(batch_ids) < 2:
                 continue
 
-            section_subjects = self.constraints.get("section_subjects", {}).get(section_id, [])
-            for subject_id in section_subjects:
+            synced_subjects = section_batch_sync.get(section_id, set())
+            for subject_id in synced_subjects:
                 subject = self.subject_map.get(subject_id)
                 if not subject or subject.get("type") != "lab":
                     continue
@@ -511,6 +595,55 @@ class TimetableSolver:
                         continue
                     for other_batch in batch_ids[1:]:
                         other_var = has_class.get((other_batch, slot_id))
+                        if other_var is not None:
+                            self.model.Add(ref_var == other_var)
+
+    def _elective_group_constraint(self):
+        """Subjects marked as electives in the same group (within one section)
+        must run at identical time slots. A student only attends the one
+        elective they picked, but the section's schedule needs to block that
+        period for everyone else's elective too - so every subject in the
+        group needs the exact same footprint, just with different
+        teachers/rooms (mirrors lab-batch simultaneity, grouped by subject
+        instead of by batch)."""
+        section_electives = self.constraints.get("section_electives", {})
+        if not section_electives:
+            return
+
+        for section_id, groups in section_electives.items():
+            if section_id not in self.variables:
+                continue
+            for group_id, subject_ids in groups.items():
+                if len(subject_ids) < 2:
+                    continue
+
+                has_class: Dict[Tuple[str, str], Any] = {}
+                for subject_id in subject_ids:
+                    teachers = self.variables[section_id].get(subject_id, {})
+                    if not teachers:
+                        continue
+                    for slot in self.time_slots:
+                        slot_id = slot["slot_id"]
+                        vars_for_slot = [
+                            slot_vars[slot_id]
+                            for rooms in teachers.values()
+                            for slot_vars in rooms.values()
+                            if slot_id in slot_vars
+                        ]
+                        if not vars_for_slot:
+                            continue
+                        indicator = self.model.NewBoolVar(f"elective_{section_id}_{group_id}_{subject_id}_{slot_id}")
+                        self.model.AddMaxEquality(indicator, vars_for_slot)
+                        has_class[(subject_id, slot_id)] = indicator
+
+                reference_subject = subject_ids[0]
+                for slot in self.time_slots:
+                    slot_id = slot["slot_id"]
+                    ref_var = has_class.get((reference_subject, slot_id))
+                    if ref_var is None:
+                        continue
+                    for other_subject in subject_ids[1:]:
+                        other_var = has_class.get((other_subject, slot_id))
                         if other_var is not None:
                             self.model.Add(ref_var == other_var)
 

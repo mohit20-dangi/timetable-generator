@@ -21,8 +21,10 @@ venv\Scripts\activate  # Linux: source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # then fill in MONGODB_URL, JWT_SECRET_KEY, NVIDIA_API_KEY, ...
 python -m app.scripts.create_first_admin   # bootstrap the first admin account
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8001
 ```
+
+(Port 8001, not 8000 - avoids clashing with anything else you may already have bound to 8000. The frontend's Vite dev proxy in `vite.config.ts` is already pointed at 8001; change both together if you use a different port.)
 
 ### Frontend
 ```bash
@@ -46,7 +48,7 @@ INVITE_EXPIRE_HOURS=72
 
 NVIDIA_API_KEY=your_nvidia_api_key_here
 NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
-NVIDIA_MODEL=meta/llama-3.1-70b-instruct
+NVIDIA_MODEL=openai/gpt-oss-20b
 CORS_ORIGINS=["http://localhost:5173"]
 ```
 
@@ -73,13 +75,15 @@ Admin registration is **invite-only**:
 - `POST /api/years/bulk` (CSV/Excel upload) / `GET /api/years/bulk/template`
 
 ### Sections (admin-only)
-- `POST /api/sections` / `GET /api/sections` / `GET /api/sections/{id}` / `GET /api/sections/year/{year_id}` / `DELETE /api/sections/{id}`
+- `POST /api/sections` / `GET /api/sections` / `GET /api/sections/{id}` / `PUT /api/sections/{id}` / `GET /api/sections/year/{year_id}` / `DELETE /api/sections/{id}`
 - `POST /api/sections/bulk` (CSV/Excel upload) / `GET /api/sections/bulk/template`
-- `POST /api/sections/{id}/subjects` / `DELETE /api/sections/{id}/subjects/{subject_id}` - assign/remove a subject
-- `POST /api/sections/{id}/lab-batches` / `DELETE /api/sections/{id}/lab-batches/{batch_id}` - manage lab batches
+- `POST /api/sections/{id}/subjects` / `DELETE /api/sections/{id}/subjects/{subject_id}` - assign/remove a subject, optionally marking it an elective (`is_elective` + `elective_group_id`) or opting its lab batches into synchronized scheduling (`batches_simultaneous`, see below)
+- `POST /api/sections/{id}/lab-batches` / `DELETE /api/sections/{id}/lab-batches/{batch_id}` - manage lab batches (managed from the Sections admin page, per-section)
+
+**Lab batches**: once a section has at least one lab batch defined, *every* lab subject assigned to that section is scheduled per-batch instead of as one whole-class session - each batch gets its own teacher/room, sized to the batch's own `strength` rather than the section's. By default each batch's lab sessions are scheduled **independently** (a different batch can land on a different day entirely). Set `batches_simultaneous: true` on a specific subject's section-link only if that lab genuinely needs every batch in class at the same slot (e.g. shared invigilation) - the solver then forces all batches of that subject to share an identical set of time slots, using different teachers/rooms.
 
 ### Subjects (admin-only)
-- `POST /api/subjects` / `GET /api/subjects` / `GET /api/subjects/{id}` / `DELETE /api/subjects/{id}`
+- `POST /api/subjects` / `GET /api/subjects` / `GET /api/subjects/{id}` / `PUT /api/subjects/{id}` / `DELETE /api/subjects/{id}`
 - `POST /api/subjects/bulk` (CSV/Excel upload) / `GET /api/subjects/bulk/template`
 - `POST /api/subjects/{id}/prerequisites/{requires_id}` / `DELETE .../prerequisites/{requires_id}`
 
@@ -92,7 +96,12 @@ Admin registration is **invite-only**:
 - `POST /api/rooms` / `GET /api/rooms` / `GET /api/rooms/{id}` / `DELETE /api/rooms/{id}`
 - `POST /api/rooms/bulk` (CSV/Excel upload) / `GET /api/rooms/bulk/template`
 
-Bulk upload accepts a CSV or `.xlsx` file, one row per record, validating and inserting each row independently - the response reports which ids were created and which rows failed and why, so one bad row doesn't block the rest. List-valued columns (equipment, subject IDs, prerequisite IDs, etc.) use a semicolon-separated cell, e.g. `computers; projector`. `GET .../bulk/template` returns a starter CSV with the expected headers. Fields with nested structure (teacher availability/preferred slots, room availability) aren't part of the bulk format - add those per-record after upload via the existing endpoints.
+Bulk upload accepts a CSV or `.xlsx` file, one row per record, validating and inserting each row independently - the response reports which ids were created and which rows failed and why, so one bad row doesn't block the rest. It only **creates** records; a row whose `id` already exists is reported as a failed row ("ID already exists"), not applied as an update - edit existing records individually (`PUT`/the admin UI) instead. List-valued columns (equipment, subject IDs, prerequisite IDs, etc.) use a semicolon-separated cell, e.g. `computers; projector`. `GET .../bulk/template` returns a starter CSV with the expected headers and one example row. Fields with nested structure aren't part of the bulk format - add those per-record after upload via the existing endpoints:
+- Teachers: availability slots and preferred slots.
+- Rooms: availability.
+- Subjects: the bulk sheet only covers each subject's own fields (`type`, `weekly_hours`, `requires_room_type`, `requires_equipment`, `prerequisite_ids` - other subject ids from the same or an earlier upload). Which **sections** offer a subject, and elective grouping, are per-section-per-subject links, not a property of the subject alone - set those afterward from the Subjects page's "Offered in Sections" panel (or `POST /api/sections/{id}/subjects`).
+
+Allowed values: Subjects `type` is `theory` | `lab` | `tutorial`; `requires_room_type` is empty (any room) or `lecture` | `lab` | `seminar`. Rooms `type` is `lecture` | `lab` | `seminar`.
 
 ### Constraints (admin-only)
 - `POST/GET/DELETE /api/constraints/time-slots`
@@ -105,6 +114,8 @@ Bulk upload accepts a CSV or `.xlsx` file, one row per record, validating and in
 - `GET /api/timetable/runs` / `GET /api/timetable/runs/{id}` / `GET /api/timetable/runs/{id}/entries`
 - `GET /api/timetable/runs/{id}/explain` - LLM explanation for an infeasible run
 - `GET /api/timetable/runs/{id}/export?format=xlsx|pdf` - export
+- `POST /api/timetable/runs/{id}/edit-nl/preview` - describe an edit in plain English (e.g. "move Prof Sharma's DS class on Monday to Wednesday period 5", "swap the rooms for CSE-A and CSE-B on Tuesday period 3"); the LLM proposes concrete operations (move/reassign room/reassign teacher/swap/delete), which are resolved against the real entries and checked for conflicts (double-booking, teacher/room eligibility) before anything is applied. Returns the proposed changes, any conflicts, and whether it's safe to apply.
+- `POST /api/timetable/runs/{id}/edit-nl/apply` - takes the `resolved_operations` from a preview and commits them, after re-validating against the run's current state. Rejects with a 409 and the conflict list if anything has changed in the meantime.
 
 ### Public (no auth — for embedding in the college website)
 - `GET /api/public/timetables/sections` / `/sections/{section_id}` - per-class/section weekly grid

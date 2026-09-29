@@ -16,7 +16,7 @@ def _repo(db: Database) -> Repository:
     return Repository(db, "subjects")
 
 
-@router.post("/", response_model=SubjectResponse)
+@router.post("", response_model=SubjectResponse)
 def create_subject(
     subject: SubjectCreate,
     db: Database = Depends(get_database),
@@ -28,7 +28,7 @@ def create_subject(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Subject with this ID already exists")
 
 
-@router.get("/", response_model=List[SubjectResponse])
+@router.get("", response_model=List[SubjectResponse])
 def list_subjects(
     db: Database = Depends(get_database),
     _admin: dict = Depends(get_current_admin),
@@ -41,7 +41,10 @@ def download_subjects_template(_admin: dict = Depends(get_current_admin)):
     return csv_template(
         ["id", "name", "type", "weekly_hours", "needs_continuous_block", "block_size",
          "requires_room_type", "requires_equipment", "prerequisite_ids"],
-        ["cs101", "Data Structures", "theory", "4", "false", "1", "", "", ""],
+        [
+            ["cs101", "Data Structures", "theory", "4", "false", "1", "", "", ""],
+            ["cs101lab", "Data Structures Lab", "lab", "2", "true", "2", "lab", "computers; projector", "cs101"],
+        ],
     )
 
 
@@ -80,6 +83,20 @@ def get_subject(
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found")
     return subject
+
+
+@router.put("/{subject_id}", response_model=SubjectResponse)
+def update_subject(
+    subject_id: str,
+    subject: SubjectCreate,
+    db: Database = Depends(get_database),
+    _admin: dict = Depends(get_current_admin),
+):
+    if not _repo(db).exists(subject_id):
+        raise HTTPException(status_code=404, detail="Subject not found")
+    patch = subject.model_dump()
+    patch.pop("id", None)
+    return _repo(db).update(subject_id, patch)
 
 
 @router.delete("/{subject_id}")

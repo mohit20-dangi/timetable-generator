@@ -160,5 +160,62 @@ This is a PROTOTYPE - label output as unverified. Do your best but note limitati
         
         return json.loads(response.choices[0].message.content)
 
+    def parse_timetable_edit(self, instruction: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse a natural-language edit request against an existing timetable into
+        structured operations. The caller is responsible for resolving each operation
+        to a concrete entry and validating it before applying anything - this only
+        proposes what to do, it never touches the timetable itself."""
+        system_prompt = """You are a timetable editing assistant. You will be given the current timetable's entries, reference lists of teachers and rooms, and a natural-language instruction describing a change to make.
+
+Convert the instruction into a JSON object with this exact schema:
+{
+  "operations": [
+    {
+      "op": "move" | "reassign_room" | "reassign_teacher" | "delete" | "swap",
+      "match": {"day": "Mon", "period": 3, "section_id": "s1", "batch_id": null, "subject_id": "sub1", "teacher_id": "t1", "room_id": "r1"},
+      "day": "Wed",
+      "period": 5,
+      "room_id": "r2",
+      "teacher_id": "t2",
+      "match_b": {"day": "Wed", "period": 5, "section_id": "s2"},
+      "swap_field": "slot"
+    }
+  ],
+  "explanation": "one sentence describing what you are about to do",
+  "unclear": false
+}
+
+Rules:
+- "match" (and "match_b" for swap) identifies exactly ONE existing entry. Only include the fields you can confidently determine from the instruction and the given entries/reference lists - use IDs, never names. Include as many identifying fields as you can (day, period, subject_id, teacher_id, room_id, section_id) to make the match unambiguous.
+- "day"/"period" are only used for "move". "room_id" is only used for "reassign_room". "teacher_id" is only used for "reassign_teacher". "match_b" and "swap_field" ("slot", "room", or "teacher") are only used for "swap".
+- Resolve any teacher/room names mentioned in the instruction to their IDs using the reference lists provided.
+- These five operations are the ONLY things you can do. If the instruction asks for anything else (e.g. creating a brand-new class, changing subject requirements), set "unclear": true, leave "operations" empty, and explain why in "explanation".
+- If the instruction is ambiguous or missing information needed to identify an entry, set "unclear": true and explain what's missing.
+- Return ONLY valid JSON. No markdown, no explanations outside the JSON."""
+
+        user_prompt = f"""Current timetable entries:
+{json.dumps(context["entries_summary"], indent=2)}
+
+Available teachers:
+{json.dumps(context["teachers_list"], indent=2)}
+
+Available rooms:
+{json.dumps(context["rooms_list"], indent=2)}
+
+Instruction: {instruction}"""
+
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.1,
+            max_tokens=2000,
+            response_format={"type": "json_object"}
+        )
+
+        return json.loads(response.choices[0].message.content)
+
 
 nvidia_client = NVIDIAClient()

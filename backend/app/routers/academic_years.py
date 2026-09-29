@@ -16,7 +16,7 @@ def _repo(db: Database) -> Repository:
     return Repository(db, "academic_years")
 
 
-@router.post("/", response_model=AcademicYearResponse)
+@router.post("", response_model=AcademicYearResponse)
 def create_academic_year(
     year: AcademicYearCreate,
     db: Database = Depends(get_database),
@@ -28,7 +28,7 @@ def create_academic_year(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Academic year with this ID already exists")
 
 
-@router.get("/", response_model=List[AcademicYearResponse])
+@router.get("", response_model=List[AcademicYearResponse])
 def list_academic_years(
     db: Database = Depends(get_database),
     _admin: dict = Depends(get_current_admin),

@@ -123,17 +123,26 @@ export function PublicTimetable() {
                   <tr key={day} className="border-t border-gray-100">
                     <td className="px-3 py-2 font-medium">{day}</td>
                     {periods.map((p) => {
-                      const cell = grid[day]?.[p];
+                      // The section view's cells are a list (independently-scheduled lab
+                      // batches or an elective group can share a slot); faculty/room cells
+                      // are always a single object since one teacher/room can't double-book.
+                      const raw = grid[day]?.[p];
+                      const cells: any[] = Array.isArray(raw) ? raw : raw ? [raw] : [];
                       const isFree = free && free[day]?.includes(p);
                       return (
                         <td key={p} className="px-3 py-2 align-top">
-                          {cell ? (
-                            <div>
-                              <div className="font-medium">{cell.subject_name || cell.subject_id}</div>
-                              <div className="text-xs text-gray-500">
-                                {cell.teacher_name || cell.teacher_id} · {cell.room_name || cell.room_id}
-                              </div>
-                              {cell.section_name && <div className="text-xs text-gray-400">{cell.section_name}</div>}
+                          {cells.length > 0 ? (
+                            <div className="space-y-2">
+                              {cells.map((cell, i) => (
+                                <div key={i}>
+                                  <div className="font-medium">{cell.subject_name || cell.subject_id}</div>
+                                  <div className="text-xs text-gray-500">
+                                    {cell.teacher_name || cell.teacher_id} · {cell.room_name || cell.room_id}
+                                  </div>
+                                  {cell.batch_name && <div className="text-xs text-gray-400">{cell.batch_name}</div>}
+                                  {cell.section_name && <div className="text-xs text-gray-400">{cell.section_name}</div>}
+                                </div>
+                              ))}
                             </div>
                           ) : isFree ? (
                             <span className="text-xs text-green-600">Free</span>

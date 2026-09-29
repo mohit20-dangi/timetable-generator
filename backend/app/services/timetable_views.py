@@ -72,12 +72,17 @@ def build_all_grids(
     for entry in entries:
         cell = _entry_cell(entry, subject_map, teacher_map, room_map, section_map, batch_names)
 
-        # A lab-batch entry belongs to its parent section's timetable too.
+        # A lab-batch entry belongs to its parent section's timetable too. A section
+        # can have more than one entry in the same slot - independently-scheduled
+        # batches landing on the same day/period by chance, or an elective group -
+        # so each slot holds a list, not a single cell.
         owning_section_id = entry.get("section_id") or batch_section.get(entry.get("batch_id"))
         if owning_section_id:
             grid = section_grids.setdefault(owning_section_id, _empty_grid(days))
-            grid.setdefault(entry["day"], {})[entry["period"]] = cell
+            grid.setdefault(entry["day"], {}).setdefault(entry["period"], []).append(cell)
 
+        # A teacher/room can never legitimately be in two places at once, so these
+        # stay single cells.
         teacher_id = entry["teacher_id"]
         grid = faculty_grids.setdefault(teacher_id, _empty_grid(days))
         grid.setdefault(entry["day"], {})[entry["period"]] = cell

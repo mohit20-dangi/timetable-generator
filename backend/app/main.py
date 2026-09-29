@@ -4,7 +4,7 @@ from app.core.config import settings
 from app.db import create_indexes
 from app.routers import (
     academic_years, sections, subjects, teachers, rooms,
-    constraints, timetable, llm, auth, public,
+    constraints, timetable, timetable_edit, llm, auth, public,
 )
 
 app = FastAPI(
@@ -36,6 +36,7 @@ app.include_router(teachers.router)
 app.include_router(rooms.router)
 app.include_router(constraints.router)
 app.include_router(timetable.router)
+app.include_router(timetable_edit.router)
 app.include_router(llm.router)
 
 # Public, read-only, no-auth router (for embedding in the college website)

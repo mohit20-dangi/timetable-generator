@@ -401,8 +401,8 @@ export function TeacherForm() {
                         : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
                     }`}
                   >
-                    <div className="font-medium">{subject.id}</div>
-                    <div className="text-xs">{subject.name}</div>
+                    <div className="font-medium">{subject.name}</div>
+                    <div className="text-xs">{subject.id}</div>
                   </button>
                 ))}
               </div>

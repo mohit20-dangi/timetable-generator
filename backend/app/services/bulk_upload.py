@@ -10,13 +10,25 @@ import pandas as pd
 from pymongo.errors import DuplicateKeyError
 
 
+_BLANK_TOKENS = {"nan", "none", "null", "na", "n/a"}
+
+
 def parse_upload_file(file_bytes: bytes, filename: str) -> List[Dict[str, Any]]:
     if filename.lower().endswith((".xlsx", ".xls")):
         df = pd.read_excel(io.BytesIO(file_bytes))
     else:
         df = pd.read_csv(io.BytesIO(file_bytes))
     df = df.where(pd.notnull(df), None)
-    return df.to_dict(orient="records")
+    rows = df.to_dict(orient="records")
+    # A cell that's literally the text "nan"/"None"/"null" (e.g. a sheet exported
+    # from another pandas dataframe without proper NA handling) means the same
+    # thing as a truly empty cell - treat it as such rather than storing the
+    # sentinel string as real data.
+    for row in rows:
+        for key, value in row.items():
+            if isinstance(value, str) and value.strip().lower() in _BLANK_TOKENS:
+                row[key] = None
+    return rows
 
 
 def split_list(value: Any) -> List[str]:
@@ -64,10 +76,16 @@ def bulk_create(rows: List[Dict[str, Any]], row_to_doc: Callable[[Dict[str, Any]
     return {"created": created, "errors": errors}
 
 
-def csv_template(headers: List[str], example_row: List[str]) -> str:
+def csv_template(headers: List[str], example_rows: List[str] | List[List[str]]) -> str:
+    """`example_rows` may be a single row (list of strings) or several rows
+    (list of lists) - several rows lets the template demonstrate optional
+    fields (e.g. a second row with a prerequisite filled in) without making
+    every column look mandatory."""
     import csv
+    rows = [example_rows] if example_rows and isinstance(example_rows[0], str) else example_rows
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(headers)
-    writer.writerow(example_row)
+    for row in rows:
+        writer.writerow(row)
     return buf.getvalue()

@@ -9,6 +9,7 @@ export interface SectionSubjectLink {
   subject_id: string;
   is_elective: boolean;
   elective_group_id: string | null;
+  batches_simultaneous: boolean;
 }
 
 export interface LabBatch {
