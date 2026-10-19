@@ -4,14 +4,15 @@ import io
 import zipfile
 from typing import Any, Dict, Iterable, List, Mapping, Type
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook, load_workbook
 from sqlalchemy.orm import Session
 
 from pydantic import ValidationError
 
-from app.auth.dependencies import require_admin
+from app.auth.dependencies import require_dept_admin
+from app.auth.scope import department_of, is_superadmin, target_department
 from app.db import get_db
 from app.models import (
     AcademicYear,
@@ -43,6 +44,18 @@ from app.schemas import (
     TimeSlotCreate,
 )
 from app.schemas.room import VALID_ROOM_TYPES
+from app.services.college_load_import import (
+    build_college_template,
+    convert_college_load_workbook,
+    is_college_load_workbook,
+    match_department,
+)
+from app.services.college_load_postprocess import (
+    CollegeFollowup,
+    apply_followups,
+    drop_soft_fields,
+    plan_followups,
+)
 
 
 router = APIRouter(prefix="/api/import", tags=["Bulk Import"])
@@ -79,11 +92,12 @@ SHEET_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             "scheme_hours_per_week", "weekly_hours", "sessions_per_week",
             "periods_per_session", "back_to_back", "batch_scheduling_mode",
             "max_per_day", "requires_room_type",
-            "linked_group_id", "elective_group_id",
+            "linked_group_id", "elective_group_id", "teachers_required", "self_study_hours",
         ],
         "int": {
             "lecture_hours", "tutorial_hours", "practical_hours", "weekly_hours",
             "sessions_per_week", "periods_per_session", "max_per_day", "scheme_hours_per_week",
+            "teachers_required", "self_study_hours",
         },
         "bool": {"back_to_back"},
         "schema": SubjectCreate,
@@ -93,9 +107,9 @@ SHEET_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "required": {"id", "name"},
         "columns": [
             "id", "name", "initials", "department_id", "max_continuous_classes", "max_daily_classes",
-            "max_weekly_hours", "is_guest_from_other_dept",
+            "max_weekly_hours", "is_guest_from_other_dept", "first_year_hours",
         ],
-        "int": {"max_continuous_classes", "max_daily_classes", "max_weekly_hours"},
+        "int": {"max_continuous_classes", "max_daily_classes", "max_weekly_hours", "first_year_hours"},
         "bool": {"is_guest_from_other_dept"},
         "schema": TeacherCreate,
     },
@@ -116,7 +130,7 @@ SHEET_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "TeacherSubjects": {
         "model": TeacherSubject,
         "required": {"teacher_id", "subject_id"},
-        "columns": ["teacher_id", "subject_id"],
+        "columns": ["teacher_id", "subject_id", "role"],
         "schema": TeacherSubjectCreate,
     },
     "LabBatches": {
@@ -135,7 +149,7 @@ SHEET_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "TimeSlots": {
         "model": TimeSlot,
         "required": {"id", "day", "period_index", "start_time", "end_time"},
-        "columns": ["id", "day", "period_index", "start_time", "end_time"],
+        "columns": ["id", "day", "period_index", "start_time", "end_time", "department_id", "slot_kind"],
         "int": {"period_index"},
         "time": {"start_time", "end_time"},
         "schema": TimeSlotCreate,
@@ -583,24 +597,147 @@ def _upsert_entities(
     return counts
 
 
-def _parse_and_validate_workbook(content: bytes, db: Session) -> tuple[Dict[str, List[Dict[str, Any]]], Dict[str, Dict[str, Dict[str, Any]]]]:
+# Entity sheets whose rows carry their own department_id, and how every
+# other sheet finds its department: (column, sheet the id refers to).
+_DEPARTMENT_COLUMN_SHEETS = ("AcademicYears", "ElectiveGroups", "Subjects", "Teachers", "Rooms", "TimeSlots")
+_PARENT_LINKS = {
+    "Sections": ("year_id", "AcademicYears"),
+    "LabBatches": ("section_id", "Sections"),
+    "SectionSubjects": ("section_id", "Sections"),
+    "TeacherSubjects": ("teacher_id", "Teachers"),
+    "Prerequisites": ("subject_id", "Subjects"),
+}
+
+
+def _enforce_department(
+    rows: Dict[str, List[Dict[str, Any]]],
+    child_values: Mapping[str, Mapping[str, Mapping[str, Any]]],
+    db: Session,
+    user: User,
+    department_id: str | None,
+) -> None:
+    """Keeps an import inside the importer's department. A blank
+    department_id on a row means the department being imported into; a
+    department admin can't name another one, can't overwrite another
+    department's record by reusing its id, and can't link to another
+    department's sections/teachers/subjects. The superadmin is unrestricted
+    but still gets blanks filled with the department they picked."""
+    default = department_id if is_superadmin(user) else user.department_id
+    restricted = not is_superadmin(user)
+    errors: List[str] = []
+
+    def existing_department(sheet_name: str, record_id: str):
+        record = db.get(SHEET_DEFINITIONS[sheet_name]["model"], record_id)
+        return (True, department_of(db, record)) if record is not None else (False, None)
+
+    # Department of every id this workbook defines, so a Section row can be
+    # checked against a year that's only in this same upload.
+    workbook_department: Dict[str, Dict[str, Any]] = {}
+    for sheet_name in _DEPARTMENT_COLUMN_SHEETS:
+        for row_number, row in enumerate(rows.get(sheet_name, []), start=2):
+            if not row.get("department_id") and default:
+                row["department_id"] = default
+            if restricted and row.get("department_id") != user.department_id:
+                errors.append(f"{sheet_name} row {row_number}: you can only import into your own department")
+            workbook_department.setdefault(sheet_name, {})[str(row["id"])] = row.get("department_id")
+
+    def department_for(sheet_name: str, record_id: str):
+        if record_id in workbook_department.get(sheet_name, {}):
+            return workbook_department[sheet_name][record_id]
+        if sheet_name in _PARENT_LINKS:
+            for row in rows.get(sheet_name, []):
+                if str(row.get("id")) == record_id:
+                    column, parent_sheet = _PARENT_LINKS[sheet_name]
+                    return department_for(parent_sheet, str(row[column]))
+        return existing_department(sheet_name, record_id)[1]
+
+    for sheet_name, (column, parent_sheet) in _PARENT_LINKS.items():
+        for row_number, row in enumerate(rows.get(sheet_name, []), start=2):
+            parent_department = department_for(parent_sheet, str(row[column]))
+            if sheet_name == "Sections":
+                workbook_department.setdefault("Sections", {})[str(row["id"])] = parent_department
+            if restricted and parent_department != user.department_id:
+                errors.append(f"{sheet_name} row {row_number}: '{row[column]}' isn't in your department")
+
+    if restricted:
+        for sheet_name, definition in SHEET_DEFINITIONS.items():
+            if sheet_name in RELATION_KEYS:
+                continue
+            for row_number, row in enumerate(rows.get(sheet_name, []), start=2):
+                exists, current = existing_department(sheet_name, str(row["id"]))
+                if exists and current != user.department_id:
+                    errors.append(f"{sheet_name} row {row_number}: id '{row['id']}' already belongs to another department")
+        for parent_sheet, per_id in child_values.items():
+            for parent_id in per_id:
+                if department_for(parent_sheet, parent_id) != user.department_id:
+                    errors.append(f"{parent_sheet}: '{parent_id}' isn't in your department")
+    if errors:
+        raise ValueError("; ".join(errors[:20]) + ("; ..." if len(errors) > 20 else ""))
+
+
+def _parse_and_validate_workbook(
+    content: bytes, db: Session, user: User, department_id: str | None = None
+) -> tuple[
+    Dict[str, List[Dict[str, Any]]], Dict[str, Dict[str, Dict[str, Any]]], Dict[str, Any], CollegeFollowup | None
+]:
+    """Returns (rows, child_values, source, followup) - `source` says which
+    format the workbook was read as, plus any notes the admin should see
+    before confirming (e.g. which allotment revision a college load file
+    used); `followup` is what a department-load import must also do around
+    its rows (see app/services/college_load_postprocess.py), None for the
+    app's own template."""
     workbook = load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+    source: Dict[str, Any] = {"format": "template", "warnings": []}
+    converted = None
+    canonical_sheets = list(SHEET_DEFINITIONS) + list(CHILD_SHEET_DEFINITIONS)
+    if is_college_load_workbook(workbook, canonical_sheets):
+        # The department's own load workbook: convert it to the template's
+        # sheets so it goes through exactly the same validation below.
+        # The workbook itself carries no department id. Use the department
+        # the admin is working in; only guess from the workbook's
+        # "Department of X" heading when the caller didn't say.
+        departments = {d.id: d.name for d in db.query(Department).all()}
+        if not is_superadmin(user):
+            department_id = user.department_id
+        if department_id:
+            if department_id not in departments:
+                raise ValueError(f"Unknown department '{department_id}'")
+            chosen_department = department_id
+        else:
+            chosen_department = match_department(workbook, list(departments.items()))
+        converted = convert_college_load_workbook(workbook, chosen_department)
+        workbook = converted.workbook
+        source = {
+            "format": "college_load", "source_sheet": converted.source_sheet, "warnings": converted.warnings,
+            "department_id": chosen_department, "department_name": departments[chosen_department],
+        }
     child_values = _read_child_sheets(workbook)
     rows = _read_rows(workbook, child_values)
     if not rows and not any(child_values.values()):
         raise ValueError("The workbook does not contain any supported data sheets")
+    _enforce_department(rows, child_values, db, user, department_id)
     ids = _collect_known_ids(rows, db)
     _validate_child_patches(child_values, ids)
     _validate_references(rows, db, ids)
     _validate_schemas(rows)
-    return rows, child_values
+    followup = None
+    if converted is not None:
+        followup = CollegeFollowup(
+            department_id=source["department_id"],
+            plan=plan_followups(db, rows, source["department_id"], converted.soft_fields, converted.soft_batch_sections),
+            soft_fields=converted.soft_fields,
+            soft_batch_sections=converted.soft_batch_sections,
+        )
+        source["warnings"] = [*source["warnings"], *followup.plan.notes]
+    return rows, child_values, source, followup
 
 
 @router.post("/excel/preview")
 async def preview_excel(
     file: UploadFile = File(...),
+    department_id: str | None = Form(None),
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_admin),
+    admin: User = Depends(require_dept_admin),
 ):
     """Parse and validate an upload without changing the database."""
     filename = (file.filename or "").lower()
@@ -610,7 +747,7 @@ async def preview_excel(
     if not content:
         raise HTTPException(status_code=400, detail="The uploaded workbook is empty")
     try:
-        rows, child_values = _parse_and_validate_workbook(content, db)
+        rows, child_values, source, _followup = _parse_and_validate_workbook(content, db, admin, department_id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
@@ -621,14 +758,16 @@ async def preview_excel(
         "sheets": {name: len(sheet_rows) for name, sheet_rows in rows.items()},
         "total_rows": sum(len(sheet_rows) for sheet_rows in rows.values()),
         "linked_updates": linked_updates,
+        **source,
     }
 
 
 @router.post("/csv")
 async def import_csv_bundle(
     file: UploadFile = File(...),
+    department_id: str | None = Form(None),
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_admin),
+    admin: User = Depends(require_dept_admin),
 ):
     """Import either one named CSV sheet or a ZIP bundle of named CSV sheets."""
     filename = (file.filename or "").lower()
@@ -660,6 +799,7 @@ async def import_csv_bundle(
             raise ValueError("CSV names must match supported sheets, for example Subjects.csv or TeacherAvailability.csv")
         child_values = _read_child_sheets(workbook)
         rows = _read_rows(workbook, child_values)
+        _enforce_department(rows, child_values, db, admin, department_id)
         ids = _collect_known_ids(rows, db)
         _validate_child_patches(child_values, ids)
         _validate_references(rows, db, ids)
@@ -682,8 +822,9 @@ async def import_csv_bundle(
 @router.post("/excel")
 async def import_excel(
     file: UploadFile = File(...),
+    department_id: str | None = Form(None),
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_admin),
+    admin: User = Depends(require_dept_admin),
 ):
     filename = (file.filename or "").lower()
     if not filename.endswith((".xlsx", ".xlsm")):
@@ -692,8 +833,12 @@ async def import_excel(
     if not content:
         raise HTTPException(status_code=400, detail="The uploaded workbook is empty")
     try:
-        rows, child_values = _parse_and_validate_workbook(content, db)
+        rows, child_values, source, followup = _parse_and_validate_workbook(content, db, admin, department_id)
+        if followup:
+            drop_soft_fields(rows, db, followup)
         counts = _upsert_entities(rows, db, child_values)
+        if followup:
+            apply_followups(db, followup)
         db.commit()
     except ValueError as exc:
         db.rollback()
@@ -706,7 +851,22 @@ async def import_excel(
         "message": "Workbook imported successfully",
         "sheets": {name: len(sheet_rows) for name, sheet_rows in rows.items()},
         **counts,
+        **source,
     }
+
+
+@router.get("/college-template")
+def download_college_template(_admin: User = Depends(require_dept_admin)):
+    """A blank workbook in the department's own load-sheet layout - the
+    format the importer is built around."""
+    output = io.BytesIO()
+    build_college_template().save(output)
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=department-load-template.xlsx"},
+    )
 
 
 # One example row per child sheet, shown in the template so admins see the
@@ -724,7 +884,7 @@ CHILD_SHEET_EXAMPLES: Dict[str, List[Any]] = {
 
 
 @router.get("/excel-template")
-def download_excel_template(_admin: User = Depends(require_admin)):
+def download_excel_template(_admin: User = Depends(require_dept_admin)):
     workbook = Workbook()
     instructions = workbook.active
     instructions.title = "Instructions"

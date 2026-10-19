@@ -4,16 +4,18 @@ from typing import List
 from app.db import get_db
 from app.models import Section, AcademicYear, LabBatch, SectionSubject, TimetableRun, User
 from app.schemas import SectionCreate, SectionResponse
-from app.auth.dependencies import get_current_user, require_admin
+from app.auth.dependencies import get_current_user, require_dept_admin
+from app.auth.scope import assert_can_manage, department_of, get_scoped_or_404, scoped
 
 router = APIRouter(prefix="/api/sections", tags=["Sections"])
 
 
 @router.post("/", response_model=SectionResponse)
-def create_section(section: SectionCreate, db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
+def create_section(section: SectionCreate, db: Session = Depends(get_db), admin: User = Depends(require_dept_admin)):
     year = db.query(AcademicYear).filter(AcademicYear.id == section.year_id).first()
     if not year:
         raise HTTPException(status_code=400, detail="year_id does not exist")
+    assert_can_manage(admin, year.department_id)
     if db.query(Section).filter(Section.id == section.id).first():
         raise HTTPException(status_code=409, detail="A section with this id already exists")
     # Phase 2.7: num_sections is a target, not just a display number - once
@@ -36,28 +38,27 @@ def create_section(section: SectionCreate, db: Session = Depends(get_db), _admin
 
 
 @router.get("/", response_model=List[SectionResponse])
-def list_sections(db: Session = Depends(get_db), _user: User = Depends(get_current_user)):
-    return db.query(Section).all()
+def list_sections(department_id: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    return scoped(db.query(Section), Section, user, department_id).all()
 
 
 @router.get("/year/{year_id}", response_model=List[SectionResponse])
-def get_sections_by_year(year_id: str, db: Session = Depends(get_db), _user: User = Depends(get_current_user)):
-    return db.query(Section).filter(Section.year_id == year_id).all()
+def get_sections_by_year(year_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    return scoped(db.query(Section).filter(Section.year_id == year_id), Section, user).all()
 
 
 @router.get("/{section_id}", response_model=SectionResponse)
-def get_section(section_id: str, db: Session = Depends(get_db), _user: User = Depends(get_current_user)):
-    section = db.query(Section).filter(Section.id == section_id).first()
-    if not section:
-        raise HTTPException(status_code=404, detail="Section not found")
-    return section
+def get_section(section_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    return get_scoped_or_404(db, Section, section_id, user, "Section")
 
 
 @router.put("/{section_id}", response_model=SectionResponse)
-def update_section(section_id: str, section: SectionCreate, db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
-    record = db.query(Section).filter(Section.id == section_id).first()
-    if not record:
-        raise HTTPException(status_code=404, detail="Section not found")
+def update_section(section_id: str, section: SectionCreate, db: Session = Depends(get_db), admin: User = Depends(require_dept_admin)):
+    record = get_scoped_or_404(db, Section, section_id, admin, "Section")
+    new_year = db.get(AcademicYear, section.year_id)
+    if not new_year:
+        raise HTTPException(status_code=400, detail="year_id does not exist")
+    assert_can_manage(admin, new_year.department_id)
     for key, value in section.model_dump(exclude={"id"}).items():
         setattr(record, key, value)
     db.commit()
@@ -67,11 +68,9 @@ def update_section(section_id: str, section: SectionCreate, db: Session = Depend
 
 @router.delete("/{section_id}")
 def delete_section(
-    section_id: str, dry_run: bool = False, db: Session = Depends(get_db), _admin: User = Depends(require_admin),
+    section_id: str, dry_run: bool = False, db: Session = Depends(get_db), admin: User = Depends(require_dept_admin),
 ):
-    section = db.query(Section).filter(Section.id == section_id).first()
-    if not section:
-        raise HTTPException(status_code=404, detail="Section not found")
+    section = get_scoped_or_404(db, Section, section_id, admin, "Section")
 
     counts = {
         "lab_batches": db.query(LabBatch).filter(LabBatch.section_id == section_id).count(),
@@ -79,10 +78,14 @@ def delete_section(
     }
 
     if dry_run:
-        return {"deletes": counts, "keeps": {"timetables": db.query(TimetableRun).count()}}
+        keeps = db.query(TimetableRun).filter(TimetableRun.department_id == department_of(db, section)).count()
+        return {"deletes": counts, "keeps": {"timetables": keeps}}
 
     db.query(LabBatch).filter(LabBatch.section_id == section_id).delete()
     db.query(SectionSubject).filter(SectionSubject.section_id == section_id).delete()
+    # A student login linked to this section would otherwise block the
+    # delete with a foreign-key error; keep the account, just unassign it.
+    db.query(User).filter(User.section_id == section_id).update({User.section_id: None})
     db.delete(section)
     db.commit()
     return {"message": "Section deleted", "deleted": counts}

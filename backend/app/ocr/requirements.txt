@@ -1,0 +1,11 @@
+# Requirements of the OCR worker ONLY (backend/app/ocr/worker.py). Install into
+# a dedicated Python 3.11 virtualenv - NOT the backend's own - and point
+# OCR_PYTHON at that venv's python. See README "First-year central timetable".
+#
+# CPU-only machine: replace paddlepaddle-gpu with `paddlepaddle==3.3.1`.
+# GPU machine: install Paddle from the CUDA index first, e.g.
+#   pip install paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
+paddleocr[doc-parser]==3.7.0
+pymupdf
+pillow
+numpy

@@ -18,9 +18,14 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from app.models import GeneratedEntry, Subject, Room, Section, LabBatch, AcademicYear, TimeSlot, Teacher, SectionSubject
+from app.services.entry_teachers import entry_teacher_ids
+from app.models import (
+    GeneratedEntry, Subject, Room, Section, LabBatch, AcademicYear, TimeSlot, Teacher, SectionSubject, TimetableRun,
+)
 from app.solver.calendar import build_slot_calendar
+from app.services.department_calendar import department_time_slots
 from app.solver.data_loader import teacher_unavailable_indices, room_unavailable_indices
+from app.services.section_attendance import by_host, default_batch_by_section, list_attendance, repeaters_attending
 
 
 @dataclass
@@ -38,29 +43,98 @@ def _minutes(value) -> int:
     return int(parts[0]) * 60 + int(parts[1])
 
 
+class ValidationRefs:
+    """Reference tables validate_entries reads. Loading them once and passing
+    the same instance to many calls matters for the manual editor, which
+    validates one candidate schedule per slot while a class is dragged - the
+    tables don't change between those calls, so re-querying them each time
+    was most of the cost."""
+
+    def __init__(self, db: Session, department_id: Optional[str] = None):
+        self.section_subject_elective = {
+            (r.section_id, r.subject_id): r.elective_group_id for r in db.query(SectionSubject).all()
+        }
+        self.subjects = {s.id: s for s in db.query(Subject).all()}
+        self.batches = {b.id: b for b in db.query(LabBatch).all()}
+        self.batch_section = {b.id: b.section_id for b in self.batches.values()}
+        self.rooms = {r.id: r for r in db.query(Room).all()}
+        self.sections = {s.id: s for s in db.query(Section).all()}
+        self.attendance_by_host = by_host(list_attendance(db))
+        self.default_batch = default_batch_by_section(db)
+        self.repeater_ids = {link.repeater_section_id for links in self.attendance_by_host.values() for link in links}
+        self.teachers = {t.id: t for t in db.query(Teacher).all()}
+        years = {y.id: y for y in db.query(AcademicYear).all()}
+        self.section_lunch: Dict[str, Dict[str, Tuple[int, int]]] = {}
+        for section in self.sections.values():
+            year = years.get(section.year_id)
+            if year and year.lunch_windows:
+                self.section_lunch[section.id] = {
+                    day: (_minutes(window[0]), _minutes(window[1]))
+                    for day, window in year.lunch_windows.items()
+                    if window and len(window) == 2
+                }
+        time_slots = department_time_slots(db, department_id)
+        self.slot_minutes = {
+            (t.day, t.period_index): (_minutes(t.start_time), _minutes(t.end_time)) for t in time_slots
+        }
+        self.slots = build_slot_calendar([
+            {"day": t.day, "period_index": t.period_index, "start_time": t.start_time, "end_time": t.end_time}
+            for t in time_slots
+        ])
+        self.slots_by_index = {s.index: s for s in self.slots}
+        self.slot_index_by_day_period = {(s.day, s.period_index): s.index for s in self.slots}
+        self._teacher_unavail: Dict[str, set] = {}
+        self._room_unavail: Dict[str, set] = {}
+
+    def teacher_unavail(self, teacher_id: str) -> set:
+        if teacher_id not in self._teacher_unavail:
+            self._teacher_unavail[teacher_id] = teacher_unavailable_indices(self.teachers[teacher_id], self.slots)
+        return self._teacher_unavail[teacher_id]
+
+    def room_unavail(self, room_id: str) -> set:
+        if room_id not in self._room_unavail:
+            self._room_unavail[room_id] = room_unavailable_indices(self.rooms[room_id], self.slots, self.slots_by_index)
+        return self._room_unavail[room_id]
+
+
 def validate_persisted_run(db: Session, run_id: int, alternative_rank: int = 1) -> List[Violation]:
     entries = (
         db.query(GeneratedEntry)
         .filter(GeneratedEntry.timetable_run_id == run_id, GeneratedEntry.alternative_rank == alternative_rank)
         .all()
     )
+    run = db.get(TimetableRun, run_id)
+    return validate_entries(db, entries, ValidationRefs(db, run.department_id if run else None))
+
+
+def _flag_teacher_clashes(entries, violations: List[Violation], is_merged_batch_group) -> None:
+    """TEACHER_CLASH, counting every teacher an entry carries (a co-taught
+    lab lists its extra supervisors in co_teacher_ids). Two entries sharing
+    only a co-teacher are just as much of a clash as two sharing a lead."""
+    groups: Dict[tuple, list] = {}
+    for e in entries:
+        for teacher_id in entry_teacher_ids(e):
+            groups.setdefault((teacher_id, e.day, e.period), []).append(e)
+    for key, group in groups.items():
+        if len(group) > 1 and not is_merged_batch_group(group):
+            ids = ", ".join(str(e.id) for e in group)
+            violations.append(Violation("TEACHER_CLASH", f"TEACHER_CLASH at {key}: entries {ids}."))
+
+
+def validate_entries(db: Session, entries, refs: Optional[ValidationRefs] = None) -> List[Violation]:
+    """Checks any entry-like objects (id, session_group, day, period,
+    section_id, batch_id, subject_id, teacher_id, room_id) - persisted rows
+    or the manual editor's in-memory drafts (app/services/timetable_editor.py)
+    - so a hand edit is held to exactly the rules generation is."""
     if not entries:
         return []
 
     violations: List[Violation] = []
+    refs = refs or ValidationRefs(db)
 
-    section_subject_rows = db.query(SectionSubject).filter(
-        SectionSubject.section_id.in_({e.section_id for e in entries if e.section_id})
-    ).all()
-    section_subject_elective = {(r.section_id, r.subject_id): r.elective_group_id for r in section_subject_rows}
-    subjects_by_id = {
-        s.id: s for s in db.query(Subject).filter(Subject.id.in_({e.subject_id for e in entries if e.subject_id})).all()
-    }
-    batch_section = {
-        b.id: b.section_id for b in db.query(LabBatch).filter(
-            LabBatch.id.in_([e.batch_id for e in entries if e.batch_id])
-        ).all()
-    }
+    section_subject_elective = refs.section_subject_elective
+    subjects_by_id = refs.subjects
+    batch_section = refs.batch_section
 
     def is_merged_batch_group(group) -> bool:
         """Phase 2.9: a subject in "merged" batch mode DELIBERATELY puts
@@ -91,7 +165,10 @@ def validate_persisted_run(db: Session, run_id: int, alternative_rank: int = 1) 
                 violations.append(Violation(label, f"{label} at {key}: entries {ids}."))
 
     flag_clashes(lambda e: (e.room_id, e.day, e.period), "ROOM_CLASH")
-    flag_clashes(lambda e: (e.teacher_id, e.day, e.period), "TEACHER_CLASH")
+    # A co-taught lab puts several teachers in one entry, so a teacher clash
+    # has to be looked for per TEACHER, not per row - flag_clashes groups
+    # rows, which can only ever see e.teacher_id.
+    _flag_teacher_clashes(entries, violations, is_merged_batch_group)
 
     # Elective basket options are deliberately co-scheduled onto the same
     # (section/batch, day, period) - each offered option is its own
@@ -129,6 +206,29 @@ def validate_persisted_run(db: Session, run_id: int, alternative_rank: int = 1) 
     flag_audience_clashes(lambda e: (e.section_id, e.day, e.period) if e.section_id else None, "SECTION_CLASH")
     flag_audience_clashes(lambda e: (e.batch_id, e.day, e.period) if e.batch_id else None, "BATCH_CLASH")
 
+    # ---- repeater sections: a repeater sits in other sections' classes and
+    # may also have classes of its own, so it must not be in two at once.
+    # (Only classes inside THIS run are visible here; clashes with a host
+    # class published in another run are prevented when generating.) ----
+    if refs.repeater_ids:
+        repeater_groups: Dict[tuple, list] = {}
+        for e in entries:
+            own_section = e.section_id or batch_section.get(e.batch_id)
+            if own_section in refs.repeater_ids:
+                repeater_groups.setdefault((own_section, e.day, e.period), []).append(e)
+            for repeater_id in repeaters_attending(
+                refs.attendance_by_host, refs.default_batch, own_section, e.subject_id, e.batch_id,
+            ):
+                repeater_groups.setdefault((repeater_id, e.day, e.period), []).append(e)
+        for key, group in repeater_groups.items():
+            if len(group) <= 1:
+                continue
+            elective_ids = {elective_group_of(e) for e in group}
+            if len(elective_ids) == 1 and None not in elective_ids:
+                continue
+            ids = ", ".join(str(e.id) for e in group)
+            violations.append(Violation("SECTION_CLASH", f"SECTION_CLASH (repeater) at {key}: entries {ids}."))
+
     # ---- batch vs its own parent section ----
     section_slots = {(e.section_id, e.day, e.period) for e in entries if e.section_id}
     for e in entries:
@@ -139,9 +239,9 @@ def validate_persisted_run(db: Session, run_id: int, alternative_rank: int = 1) 
             ))
 
     # ---- room capacity ----
-    rooms = {r.id: r for r in db.query(Room).filter(Room.id.in_({e.room_id for e in entries})).all()}
-    sections = {s.id: s for s in db.query(Section).filter(Section.id.in_({e.section_id for e in entries if e.section_id})).all()}
-    batches = {b.id: b for b in db.query(LabBatch).filter(LabBatch.id.in_({e.batch_id for e in entries if e.batch_id})).all()}
+    rooms = refs.rooms
+    sections = {e.section_id: refs.sections[e.section_id] for e in entries if e.section_id in refs.sections}
+    batches = refs.batches
     for e in entries:
         room = rooms.get(e.room_id)
         if not room:
@@ -158,19 +258,8 @@ def validate_persisted_run(db: Session, run_id: int, alternative_rank: int = 1) 
             ))
 
     # ---- lunch window ----
-    slot_minutes = {
-        (t.day, t.period_index): (_minutes(t.start_time), _minutes(t.end_time))
-        for t in db.query(TimeSlot).all()
-    }
-    year_lunch: Dict[str, Dict[str, Tuple[int, int]]] = {}
-    for section in sections.values():
-        year = db.query(AcademicYear).filter(AcademicYear.id == section.year_id).first()
-        if year and year.lunch_windows:
-            year_lunch[section.id] = {
-                day: (_minutes(window[0]), _minutes(window[1]))
-                for day, window in year.lunch_windows.items()
-                if window and len(window) == 2
-            }
+    slot_minutes = refs.slot_minutes
+    year_lunch = {sid: refs.section_lunch[sid] for sid in sections if sid in refs.section_lunch}
     for e in entries:
         section_id = e.section_id or (batch_section.get(e.batch_id) if e.batch_id else None)
         day_windows = year_lunch.get(section_id)
@@ -192,25 +281,22 @@ def validate_persisted_run(db: Session, run_id: int, alternative_rank: int = 1) 
     # uses, so this independent check can never drift out of sync with
     # what the model actually enforces ----
     teachers = {
-        t.id: t for t in db.query(Teacher).filter(Teacher.id.in_({e.teacher_id for e in entries if e.teacher_id})).all()
+        tid: refs.teachers[tid]
+        for e in entries for tid in entry_teacher_ids(e) if tid in refs.teachers
     }
-    slots = build_slot_calendar([
-        {"day": t.day, "period_index": t.period_index, "start_time": t.start_time, "end_time": t.end_time}
-        for t in db.query(TimeSlot).all()
-    ])
-    slots_by_index = {s.index: s for s in slots}
-    slot_index_by_day_period = {(s.day, s.period_index): s.index for s in slots}
-    teacher_unavail = {t_id: teacher_unavailable_indices(t, slots) for t_id, t in teachers.items()}
-    room_unavail = {r_id: room_unavailable_indices(r, slots, slots_by_index) for r_id, r in rooms.items()}
+    slot_index_by_day_period = refs.slot_index_by_day_period
+    teacher_unavail = {t_id: refs.teacher_unavail(t_id) for t_id in teachers}
+    room_unavail = {r_id: refs.room_unavail(r_id) for r_id in {e.room_id for e in entries if e.room_id in rooms}}
     for e in entries:
         slot_index = slot_index_by_day_period.get((e.day, e.period))
         if slot_index is None:
             continue
-        if e.teacher_id and slot_index in teacher_unavail.get(e.teacher_id, set()):
-            violations.append(Violation(
-                "TEACHER_UNAVAILABLE",
-                f"Entry {e.id}: teacher {e.teacher_id} is marked unavailable at {e.day} period {e.period}.",
-            ))
+        for teacher_id in entry_teacher_ids(e):
+            if slot_index in teacher_unavail.get(teacher_id, set()):
+                violations.append(Violation(
+                    "TEACHER_UNAVAILABLE",
+                    f"Entry {e.id}: teacher {teacher_id} is marked unavailable at {e.day} period {e.period}.",
+                ))
         if e.room_id and slot_index in room_unavail.get(e.room_id, set()):
             violations.append(Violation(
                 "ROOM_UNAVAILABLE",
@@ -221,10 +307,13 @@ def validate_persisted_run(db: Session, run_id: int, alternative_rank: int = 1) 
     # constraints): daily/weekly period counts and same-day back-to-back
     # runs, all counted in PERIODS (one GeneratedEntry row each), not
     # sessions ----
+    # Workload counts every teacher in the room: supervising a co-taught lab
+    # is as much of a period as teaching alone, and a second supervisor
+    # whose load went uncounted could sail past their weekly cap unnoticed.
     entries_by_teacher: Dict[str, list] = {}
     for e in entries:
-        if e.teacher_id:
-            entries_by_teacher.setdefault(e.teacher_id, []).append(e)
+        for teacher_id in entry_teacher_ids(e):
+            entries_by_teacher.setdefault(teacher_id, []).append(e)
     for teacher_id, t_entries in entries_by_teacher.items():
         teacher = teachers.get(teacher_id)
         if not teacher:
@@ -258,17 +347,17 @@ def validate_persisted_run(db: Session, run_id: int, alternative_rank: int = 1) 
                 ))
 
     # ---- teacher consistency + max-per-day, per (subject, audience) ----
-    subjects = {s.id: s for s in db.query(Subject).filter(Subject.id.in_({e.subject_id for e in entries})).all()}
+    subjects = subjects_by_id
     by_group: Dict[Tuple[str, str], list] = {}
     for e in entries:
         audience = e.section_id or e.batch_id or "unknown"
         by_group.setdefault((e.subject_id, audience), []).append(e)
     for (subject_id, audience), group in by_group.items():
-        teacher_ids = {e.teacher_id for e in group}
-        if len(teacher_ids) > 1:
+        teams = {tuple(entry_teacher_ids(e)) for e in group}
+        if len(teams) > 1:
             violations.append(Violation(
                 "TEACHER_INCONSISTENT",
-                f"Subject {subject_id} for {audience} has {len(teacher_ids)} different teachers.",
+                f"Subject {subject_id} for {audience} has {len(teams)} different sets of teachers.",
             ))
         subject = subjects.get(subject_id)
         cap = subject.max_per_day if subject else 1

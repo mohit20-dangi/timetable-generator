@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import text
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
@@ -12,12 +12,14 @@ from app import db as db_module
 from app import models  # noqa: F401 - registers every model with Base.metadata
 
 from app.routers import (
-    institutions, departments, academic_terms, academic_years, sections,
+    departments, academic_terms, academic_years, sections,
     subjects, subject_types, equipment, teachers, rooms, constraints,
-    constraint_rules, elective_groups, imports, timetable, admin, auth, llm, ai_agent,
+    constraint_rules, elective_groups, lab_rotation_groups, imports, timetable, timetable_editor, admin, auth, llm, ai_agent, custom_filters,
+    first_year_import, remedial,
 )
 from app.models import (
-    SubjectType, Equipment as EquipmentModel, Subject, Room, Institution, Department, Teacher, TimetableRun,
+    SubjectType, Equipment as EquipmentModel, Subject, Room, Department, Teacher, TimetableRun, User,
+    AuditLog, SavedFilter,
 )
 
 # create_all only creates tables that don't exist yet - it never adds a
@@ -35,6 +37,14 @@ from app.models import (
 # response-validation error instead of ever reaching a page. None means the
 # schema treats NULL as meaningful (e.g. sessions_per_week's "derive it").
 SQLITE_COLUMN_BACKFILLS = [
+    ("subjects", "self_study_hours", "INTEGER", 0),
+    ("teachers", "first_year_hours", "INTEGER", 0),
+    ("teacher_subjects", "role", "VARCHAR", "main"),
+    # Department separation: bell schedule, subject types and equipment are
+    # now per department (NULL = from before, see the models).
+    ("time_slots", "department_id", "VARCHAR", None),
+    ("subject_types", "department_id", "VARCHAR", None),
+    ("equipment", "department_id", "VARCHAR", None),
     ("timetable_runs", "term_id", "VARCHAR", None),
     # Phase 2.3/2.4/2.6: L-T-P entry, honest session/period fields, and the
     # hard per-subject parallel-batches override.
@@ -59,9 +69,33 @@ SQLITE_COLUMN_BACKFILLS = [
     # matching column for the per-subject/per-window override rule.
     ("subjects", "batch_scheduling_mode", "VARCHAR", "independent"),
     ("constraint_rules", "batch_mode", "VARCHAR", None),
+    # Admin-defined preference templates carry their parameters here.
+    ("constraint_rules", "params", "TEXT", None),
     # AI edit-plan agent: per-run subject overrides applied on top of the
     # department's normal data when re-solving from a chat instruction.
     ("timetable_runs", "subject_overrides", "TEXT", None),
+    # Multi-department support: subjects now belong to a department; existing
+    # rows predate the column and get it added with no default (nullable).
+    ("subjects", "department_id", "VARCHAR", None),
+    # Numbers for scheduling priorities that take one (max lectures in a row).
+    ("constraint_profiles", "rule_params", "TEXT", None),
+    # Manual timetable editor: lock a class / badge hand-placed classes.
+    ("generated_entries", "is_locked", "BOOLEAN", 0),
+    ("generated_entries", "is_manual", "BOOLEAN", 0),
+    # First-year central timetable import tags its Reservation rows.
+    ("reservations", "source", "VARCHAR", None),
+    ("reservations", "tile_id", "INTEGER", None),
+    # Repeater sections attend another section's class for some subjects.
+    ("section_subjects", "attends_with_section_id", "VARCHAR", None),
+    ("section_subjects", "attends_with_batch_id", "VARCHAR", None),
+    ("sections", "is_repeater", "BOOLEAN", 0),
+    # Remedial slots (after hours / free days) are kept apart from regular ones.
+    ("time_slots", "slot_kind", "VARCHAR", "regular"),
+    # Labs needing more than one supervisor at once: the count lives on the
+    # subject, the extra teachers on each generated entry. Existing rows
+    # predate both, so they get the single-teacher behaviour they had.
+    ("subjects", "teachers_required", "INTEGER", 1),
+    ("generated_entries", "co_teacher_ids", "TEXT", None),
 ]
 
 BUILTIN_SUBJECT_TYPES = [
@@ -87,19 +121,32 @@ def _seed_subject_types(db) -> None:
 
 
 def _ensure_default_department(db) -> None:
-    """Phase 3.1: the UI is a single-department experience - an admin should
-    never have to create an institution and department before touching
-    anything else. If nothing exists yet, provision one department so the
-    rest of setup (subjects, teachers, rooms, generation) has something to
-    attach to. Every column that supports multiple departments/institutions
-    stays exactly as it is - this only removes the empty-state dead end,
-    it doesn't remove the capability. Institution/Department management is
-    still reachable from Settings for colleges that outgrow one department."""
-    if db.query(Institution).count() or db.query(Department).count():
+    """A brand-new install gets one department so setup has somewhere to
+    attach to before the superadmin creates the real ones."""
+    if db.query(Department).count():
         return
-    institution = Institution(id="default", name="My Institution")
-    db.add(institution)
-    db.add(Department(id="default", institution_id=institution.id, name="My Department"))
+    db.add(Department(id="default", name="My Department"))
+    db.commit()
+
+
+def _migrate_roles(db) -> None:
+    """The ADMIN / HOD / FACULTY roles became SUPERADMIN / DEPT_ADMIN / HOD /
+    TEACHER. The old ADMIN could touch every department, so it maps to
+    SUPERADMIN; FACULTY maps to TEACHER and takes its department from its
+    teacher record. The old STUDENT role was already unsupported (students
+    use the public timetable page), so those logins are removed.
+    Idempotent: a no-op once nothing has an old role."""
+    db.query(User).filter(User.role == "ADMIN").update({User.role: "SUPERADMIN"})
+    for user in db.query(User).filter(User.role == "FACULTY").all():
+        user.role = "TEACHER"
+        teacher = db.get(Teacher, user.teacher_id) if user.teacher_id else None
+        if teacher and not user.department_id:
+            user.department_id = teacher.department_id
+    for user in db.query(User).filter(User.role == "STUDENT").all():
+        db.query(TimetableRun).filter(TimetableRun.created_by == user.id).update({TimetableRun.created_by: None})
+        db.query(AuditLog).filter(AuditLog.actor_user_id == user.id).update({AuditLog.actor_user_id: None})
+        db.query(SavedFilter).filter(SavedFilter.created_by == user.id).update({SavedFilter.created_by: None})
+        db.delete(user)
     db.commit()
 
 
@@ -225,6 +272,7 @@ async def lifespan(_app: FastAPI):
         db = db_module.SessionLocal()
         try:
             _ensure_default_department(db)
+            _migrate_roles(db)
             _seed_subject_types(db)
             _migrate_equipment_catalog(db)
             _backfill_export_labels(db)
@@ -247,6 +295,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+@app.middleware("http")
+async def remember_active_department(request: Request, call_next):
+    """See app.auth.scope.active_department."""
+    from app.auth.scope import active_department
+
+    token = active_department.set(request.headers.get("x-department-id") or None)
+    try:
+        return await call_next(request)
+    finally:
+        active_department.reset(token)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
@@ -256,7 +316,6 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
-app.include_router(institutions.router)
 app.include_router(departments.router)
 app.include_router(academic_terms.router)
 app.include_router(academic_years.router)
@@ -269,11 +328,16 @@ app.include_router(rooms.router)
 app.include_router(constraints.router)
 app.include_router(constraint_rules.router)
 app.include_router(elective_groups.router)
+app.include_router(lab_rotation_groups.router)
 app.include_router(imports.router)
 app.include_router(timetable.router)
+app.include_router(timetable_editor.router)
 app.include_router(admin.router)
 app.include_router(llm.router)
 app.include_router(ai_agent.router)
+app.include_router(custom_filters.router)
+app.include_router(first_year_import.router)
+app.include_router(remedial.router)
 
 
 @app.get("/api/health")

@@ -14,6 +14,7 @@ class TeacherBase(BaseModel):
     availability: List[Any] = Field(default_factory=list)
     preferred_slots: List[Any] = Field(default_factory=list)
     is_guest_from_other_dept: bool = False
+    first_year_hours: int = 0
 
 
 class TeacherCreate(TeacherBase):

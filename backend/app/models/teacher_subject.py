@@ -10,5 +10,8 @@ class TeacherSubject(Base):
 
     teacher_id = Column(String, ForeignKey("teachers.id"), nullable=False)
     subject_id = Column(String, ForeignKey("subjects.id"), nullable=False)
+    # main | secondary. A session is run by a main teacher; secondary
+    # teachers assist and are present at the same time.
+    role = Column(String, default="main")
 
     __table_args__ = (PrimaryKeyConstraint("teacher_id", "subject_id"),)

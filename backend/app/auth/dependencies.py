@@ -37,7 +37,7 @@ def get_current_user(
 
 
 def require_roles(*allowed_roles: str):
-    """Usage: Depends(require_roles('ADMIN')) or Depends(require_roles('ADMIN', 'FACULTY'))"""
+    """Usage: Depends(require_roles(SUPERADMIN, DEPT_ADMIN))"""
 
     def checker(current_user: User = Depends(get_current_user)) -> User:
         if current_user.role not in allowed_roles:
@@ -50,10 +50,17 @@ def require_roles(*allowed_roles: str):
     return checker
 
 
-# Convenience shortcuts used throughout the routers
-require_admin = require_roles("ADMIN")
-require_admin_or_faculty = require_roles("ADMIN", "FACULTY")
-# HOD = department coordinator: can generate/edit/publish timetables, but
-# only for their own department (see _assert_department_access in
-# routers/timetable.py - role membership alone isn't enough here).
-require_admin_or_hod = require_roles("ADMIN", "HOD")
+# Roles, broadest first. Every role except SUPERADMIN is pinned to the one
+# department on its account - role membership alone never grants access to
+# another department's data; see app/auth/scope.py for that check.
+SUPERADMIN = "SUPERADMIN"  # the developer/operator: every department
+DEPT_ADMIN = "DEPT_ADMIN"  # full control of one department's setup and timetables
+HOD = "HOD"                # one department's timetables: generate/edit/publish
+TEACHER = "TEACHER"        # their own published timetable
+ALL_ROLES = (SUPERADMIN, DEPT_ADMIN, HOD, TEACHER)
+
+require_superadmin = require_roles(SUPERADMIN)
+# Changing setup data (subjects, teachers, rooms, rules, users, imports).
+require_dept_admin = require_roles(SUPERADMIN, DEPT_ADMIN)
+# Generating, editing and publishing timetables.
+require_timetable_manager = require_roles(SUPERADMIN, DEPT_ADMIN, HOD)

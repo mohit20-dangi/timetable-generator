@@ -7,7 +7,7 @@ actually enforced - not just that generation "succeeds".
 from openpyxl import load_workbook
 import io
 
-ADMIN = {"email": "admin@test.edu", "password": "TestPassword123!", "full_name": "Admin", "role": "ADMIN"}
+ADMIN = {"email": "admin@test.edu", "password": "TestPassword123!", "full_name": "Admin", "role": "SUPERADMIN"}
 
 
 def _auth_headers(client, email=ADMIN["email"], password=ADMIN["password"]):
@@ -36,7 +36,6 @@ def test_reset_scoping_keeps_timetable_history(client):
     """Phase 0.1: resetting "sections" must never touch TimetableRun/
     GeneratedEntry - only the explicit "timetables" scope does."""
     headers = _bootstrap(client)
-    client.post("/api/institutions/", json={"id": "inst1", "name": "Test"}, headers=headers)
     client.post("/api/departments/", json={"id": "cse", "institution_id": "inst1", "name": "CSE"}, headers=headers)
     _time_slots(client, headers, ["Mon"], periods_per_day=1)
     client.post("/api/years/", json={"id": "y1", "name": "Y1", "department_id": "cse"}, headers=headers)
@@ -70,7 +69,6 @@ def test_editing_a_class_creates_a_child_run_and_leaves_parent_untouched(client)
     """Phase 0.3: editing must copy-on-write into a new TimetableRun, not
     mutate the run being viewed."""
     headers = _bootstrap(client)
-    client.post("/api/institutions/", json={"id": "inst1", "name": "Test"}, headers=headers)
     client.post("/api/departments/", json={"id": "cse", "institution_id": "inst1", "name": "CSE"}, headers=headers)
     _time_slots(client, headers, ["Mon", "Tue"], periods_per_day=1)
     client.post("/api/years/", json={"id": "y1", "name": "Y1", "department_id": "cse"}, headers=headers)
@@ -113,7 +111,6 @@ def test_teacher_marked_unavailable_is_never_scheduled_then(client):
     """Phase 1.1: TeacherInfo.unavailable_slot_indices must actually forbid
     placement, not just be computed and ignored."""
     headers = _bootstrap(client)
-    client.post("/api/institutions/", json={"id": "inst1", "name": "Test"}, headers=headers)
     client.post("/api/departments/", json={"id": "cse", "institution_id": "inst1", "name": "CSE"}, headers=headers)
     _time_slots(client, headers, ["Mon", "Tue"], periods_per_day=1)
     client.post("/api/years/", json={"id": "y1", "name": "Y1", "department_id": "cse"}, headers=headers)
@@ -147,7 +144,6 @@ def test_teacher_daily_cap_is_respected(client):
     unsatisfiable - proving the cap is a real hard constraint, not just
     stored and displayed."""
     headers = _bootstrap(client)
-    client.post("/api/institutions/", json={"id": "inst1", "name": "Test"}, headers=headers)
     client.post("/api/departments/", json={"id": "cse", "institution_id": "inst1", "name": "CSE"}, headers=headers)
     _time_slots(client, headers, ["Mon"], periods_per_day=2)
     client.post("/api/years/", json={"id": "y1", "name": "Y1", "department_id": "cse"}, headers=headers)
@@ -171,7 +167,6 @@ def test_teacher_weekly_cap_is_respected(client):
     different days, so the daily cap alone couldn't explain a failure)
     must still make generation infeasible."""
     headers = _bootstrap(client)
-    client.post("/api/institutions/", json={"id": "inst1", "name": "Test"}, headers=headers)
     client.post("/api/departments/", json={"id": "cse", "institution_id": "inst1", "name": "CSE"}, headers=headers)
     _time_slots(client, headers, ["Mon", "Tue"], periods_per_day=1)
     client.post("/api/years/", json={"id": "y1", "name": "Y1", "department_id": "cse"}, headers=headers)
@@ -197,7 +192,6 @@ def test_teacher_continuous_cap_is_respected(client):
     exactly 3 periods, all needed) against max_continuous_classes=2 must
     be infeasible."""
     headers = _bootstrap(client)
-    client.post("/api/institutions/", json={"id": "inst1", "name": "Test"}, headers=headers)
     client.post("/api/departments/", json={"id": "cse", "institution_id": "inst1", "name": "CSE"}, headers=headers)
     _time_slots(client, headers, ["Mon"], periods_per_day=3)
     client.post("/api/years/", json={"id": "y1", "name": "Y1", "department_id": "cse"}, headers=headers)
@@ -224,7 +218,6 @@ def test_hard_constraint_rule_changes_the_result(client):
     actually reach the solver - the previous build stored, displayed, and
     audited these rules while no code path ever read them."""
     headers = _bootstrap(client)
-    client.post("/api/institutions/", json={"id": "inst1", "name": "Test"}, headers=headers)
     client.post("/api/departments/", json={"id": "cse", "institution_id": "inst1", "name": "CSE"}, headers=headers)
     _time_slots(client, headers, ["Mon", "Tue"], periods_per_day=1)
     client.post("/api/years/", json={"id": "y1", "name": "Y1", "department_id": "cse"}, headers=headers)
@@ -256,7 +249,6 @@ def test_export_merges_multi_period_block_and_renders_lunch_band(client):
     2-period block prints as ONE merged cell, not one row per period, and
     a per-day lunch window renders as its own labelled cell."""
     headers = _bootstrap(client)
-    client.post("/api/institutions/", json={"id": "inst1", "name": "Test"}, headers=headers)
     client.post("/api/departments/", json={"id": "cse", "institution_id": "inst1", "name": "CSE"}, headers=headers)
     # 4 contiguous periods: a 2-period lab fills 1-2, lunch covers period 3,
     # nothing scheduled in period 4.

@@ -19,14 +19,15 @@ export function DepartmentProvider({ children }: { children: ReactNode }) {
 
   const refresh = () => {
     departmentsApi.list().then((response) => {
-      // An HOD is scoped to exactly one department server-side on every
-      // timetable route - the picker must not offer (or silently fall
-      // back to) any other one, or "generate" would just 403.
-      const scoped = user?.role === 'HOD'
+      // Everyone but the superadmin is pinned to the department on their
+      // account server-side - the picker must not offer (or silently fall
+      // back to) any other one.
+      const pinned = user && user.role !== 'SUPERADMIN';
+      const scoped = pinned
         ? response.data.filter((d: Department) => d.id === user.department_id)
         : response.data;
       setDepartments(scoped);
-      if (user?.role === 'HOD') {
+      if (pinned) {
         if (user.department_id) setDepartmentId(user.department_id);
         return;
       }

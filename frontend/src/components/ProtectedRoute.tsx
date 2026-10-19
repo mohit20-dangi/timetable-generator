@@ -1,12 +1,13 @@
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { Role } from '../auth/roles';
 
 export function ProtectedRoute({
   children,
   allowedRoles,
 }: {
   children: JSX.Element;
-  allowedRoles?: Array<'ADMIN' | 'HOD' | 'FACULTY' | 'STUDENT'>;
+  allowedRoles?: Role[];
 }) {
   const { user, loading } = useAuth();
 

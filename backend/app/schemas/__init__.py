@@ -1,5 +1,4 @@
-from app.schemas.institution import InstitutionCreate, InstitutionResponse
-from app.schemas.department import DepartmentCreate, DepartmentResponse
+from app.schemas.department import DepartmentCreate, DepartmentResponse, DepartmentUpdate
 from app.schemas.academic_term import AcademicTermCreate, AcademicTermResponse
 from app.schemas.academic_year import AcademicYearCreate, AcademicYearResponse
 from app.schemas.section import SectionCreate, SectionResponse
@@ -8,6 +7,10 @@ from app.schemas.elective_group import (
     ElectiveGroupCreate, ElectiveGroupResponse,
     ElectivePreflightResponse, ElectivePreflightIssue,
 )
+from app.schemas.lab_rotation_group import (
+    LabRotationGroupCreate, LabRotationGroupResponse,
+    LabRotationPreflightResponse, LabRotationPreflightIssue,
+)
 from app.schemas.subject import SubjectCreate, SubjectResponse
 from app.schemas.batch_preflight import BatchPreflightResponse, BatchPreflightIssue
 from app.schemas.subject_type import SubjectTypeCreate, SubjectTypeResponse
@@ -15,7 +18,9 @@ from app.schemas.equipment import EquipmentCreate, EquipmentResponse
 from app.schemas.teacher import TeacherCreate, TeacherResponse
 from app.schemas.teacher_subject import TeacherSubjectCreate
 from app.schemas.room import RoomCreate, RoomResponse
-from app.schemas.time_slot import TimeSlotCreate, TimeSlotResponse
+from app.schemas.time_slot import (
+    TimeSlotCreate, TimeSlotResponse, TimeSlotUpdate, BellSchedulePeriod, BellScheduleReplace,
+)
 from app.schemas.prerequisite import PrerequisiteCreate
 from app.schemas.constraint_rule import ConstraintRuleCreate, ConstraintRuleResponse
 from app.schemas.constraint_profile import ConstraintProfileCreate, ConstraintProfileResponse
@@ -44,17 +49,21 @@ class SectionSubjectCreate(BaseModel):
     subject_id: str
     is_elective: bool = False
     elective_group_id: Optional[str] = None
+    attends_with_section_id: Optional[str] = None
+    attends_with_batch_id: Optional[str] = None
 
 
 __all__ = [
-    "InstitutionCreate", "InstitutionResponse",
-    "DepartmentCreate", "DepartmentResponse",
+
+    "DepartmentCreate", "DepartmentResponse", "DepartmentUpdate",
     "AcademicTermCreate", "AcademicTermResponse",
     "AcademicYearCreate", "AcademicYearResponse",
     "SectionCreate", "SectionResponse",
     "LabBatchCreate", "LabBatchResponse",
     "ElectiveGroupCreate", "ElectiveGroupResponse",
     "ElectivePreflightResponse", "ElectivePreflightIssue",
+    "LabRotationGroupCreate", "LabRotationGroupResponse",
+    "LabRotationPreflightResponse", "LabRotationPreflightIssue",
     "SubjectCreate", "SubjectResponse",
     "BatchPreflightResponse", "BatchPreflightIssue",
     "SubjectTypeCreate", "SubjectTypeResponse",

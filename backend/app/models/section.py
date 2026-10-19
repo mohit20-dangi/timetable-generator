@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, ForeignKey
+from sqlalchemy import Column, String, Integer, Boolean, ForeignKey
 from sqlalchemy.orm import relationship
 from app.db import Base
 
@@ -10,5 +10,8 @@ class Section(Base):
     year_id = Column(String, ForeignKey("academic_years.id"), nullable=False)
     name = Column(String, nullable=False)
     strength = Column(Integer, default=60)
+    # Label for the section of repeating students; the solver doesn't need it
+    # (attendance is carried by SectionSubject.attends_with_section_id).
+    is_repeater = Column(Boolean, default=False)
 
     year = relationship("AcademicYear", backref="sections")

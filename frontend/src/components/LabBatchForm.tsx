@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
-import { constraintsApi, sectionsApi, subjectsApi } from '../api/client';
-import { Section, LabBatch, Subject, BatchPreflightResult } from '../types';
+import { constraintsApi, sectionsApi, subjectsApi, yearsApi } from '../api/client';
+import { Section, LabBatch, Subject, BatchPreflightResult, AcademicYear } from '../types';
+import { sectionLabel, yearMap } from '../utils/sectionLabel';
 import { Plus, Trash2, Users, CheckCircle2, AlertTriangle } from 'lucide-react';
 
 export function LabBatchForm() {
   const [sections, setSections] = useState<Section[]>([]);
+  const [years, setYears] = useState<Record<string, AcademicYear>>({});
   const [batches, setBatches] = useState<LabBatch[]>([]);
   const [labSubjects, setLabSubjects] = useState<Subject[]>([]);
   const [sectionId, setSectionId] = useState('');
@@ -15,8 +17,9 @@ export function LabBatchForm() {
   const [error, setError] = useState('');
 
   const load = async () => {
-    const [sectionResponse, subjectResponse] = await Promise.all([sectionsApi.list(), subjectsApi.list()]);
+    const [sectionResponse, subjectResponse, yearResponse] = await Promise.all([sectionsApi.list(), subjectsApi.list(), yearsApi.list()]);
     setSections(sectionResponse.data);
+    setYears(yearMap(yearResponse.data));
     setLabSubjects(subjectResponse.data.filter((s: Subject) => s.type === 'lab'));
     const selected = sectionId || sectionResponse.data[0]?.id || '';
     if (!sectionId) setSectionId(selected);
@@ -105,7 +108,7 @@ export function LabBatchForm() {
       <div className="mb-5">
         <label className="block text-sm font-medium text-gray-700 mb-1">Section</label>
         <select value={sectionId} onChange={(event) => loadBatches(event.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white">
-          {sections.map((section) => <option key={section.id} value={section.id}>{section.name} ({section.strength} students)</option>)}
+          {sections.map((section) => <option key={section.id} value={section.id}>{sectionLabel(section, years)} ({section.strength} students)</option>)}
         </select>
       </div>
 
@@ -124,7 +127,7 @@ export function LabBatchForm() {
         if (total >= section.strength) return null;
         return (
           <p className="mb-4 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">
-            These batches add up to {total} of {section.strength} students in {section.name} - the rest aren't in any batch yet.
+            These batches add up to {total} of {section.strength} students in {sectionLabel(section, years)} - the rest aren't in any batch yet.
           </p>
         );
       })()}

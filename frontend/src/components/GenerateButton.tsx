@@ -4,6 +4,7 @@ import { timetableApi, constraintsApi, yearsApi, sectionsApi, academicTermsApi }
 import { TimetableRun, ConstraintProfile, AcademicYear, Section, AcademicTerm, ScopeMode } from '../types';
 import { useDepartment } from '../context/DepartmentContext';
 import { Play, RefreshCw, CheckCircle, XCircle, AlertCircle, AlertTriangle } from 'lucide-react';
+import SelectAllButtons from './SelectAllButtons';
 
 export function GenerateButton() {
   const { departmentId } = useDepartment();
@@ -242,7 +243,10 @@ export function GenerateButton() {
           )}
           {generationScope === 'sections' && (
             <div className="mt-3 space-y-2 rounded-lg border border-gray-200 bg-white p-3">
-              <p className="text-xs text-gray-500">Select one or more sections. This is useful for testing one class such as third-year Section A.</p>
+              <div className="flex items-center flex-wrap gap-3">
+                <p className="text-xs text-gray-500">Select one or more sections. This is useful for testing one class such as third-year Section A.</p>
+                <SelectAllButtons disabled={isGenerating} onSelectAll={() => setSelectedSections(sections.map((s) => s.id))} onClear={() => setSelectedSections([])} />
+              </div>
               {sections.map((section) => (
                 <label key={section.id} className="flex items-center gap-2 text-sm text-gray-700">
                   <input
@@ -251,7 +255,7 @@ export function GenerateButton() {
                     onChange={(event) => setSelectedSections((current) => event.target.checked ? [...current, section.id] : current.filter((id) => id !== section.id))}
                     disabled={isGenerating}
                   />
-                  {section.name} ({section.id})
+                  {years.find((y) => y.id === section.year_id)?.name} - {section.name} ({section.id})
                 </label>
               ))}
               {sections.length === 0 && <p className="text-sm text-gray-500">No sections configured.</p>}

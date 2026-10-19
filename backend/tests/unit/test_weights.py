@@ -1,15 +1,28 @@
 import inspect
 
-from app.solver import model_builder
-from app.solver.weights import resolve_weights, is_must_have, SOFT_RULE_KEYS, LEVEL_WEIGHT, PRESETS
+from app.solver import model_builder, priority_rules
+from app.solver.weights import (
+    resolve_weights, resolve_rule_params, is_must_have, SOFT_RULE_KEYS, LEVEL_WEIGHT, PRESETS,
+    RULE_PARAM_DEFAULTS,
+)
 
 
 def test_every_soft_rule_key_is_read_by_the_model_builder():
     """A key in SOFT_RULE_KEYS that model_builder never reads would be a UI
-    control that silently does nothing - CLAUDE.md forbids shipping that."""
-    source = inspect.getsource(model_builder)
+    control that silently does nothing - CLAUDE.md forbids shipping that.
+    The newer teacher/week-shape rules live in priority_rules.py, which
+    model_builder calls, so either module counts as "reading" a key."""
+    source = inspect.getsource(model_builder) + inspect.getsource(priority_rules)
     for key in SOFT_RULE_KEYS:
-        assert f'"{key}"' in source, f"{key} is offered to admins but model_builder never reads it"
+        assert f'"{key}"' in source, f"{key} is offered to admins but the solver never reads it"
+
+
+def test_rule_params_default_to_two_consecutive_and_sanitise_bad_input():
+    assert resolve_rule_params(None)["max_consecutive_teaching"] == 2
+    assert resolve_rule_params({"max_consecutive_teaching": 3})["max_consecutive_teaching"] == 3
+    for bad in (0, -1, "3", 2.5, True, None):
+        assert resolve_rule_params({"max_consecutive_teaching": bad})["max_consecutive_teaching"] == 2
+    assert set(resolve_rule_params({})) == set(RULE_PARAM_DEFAULTS)
 
 
 def test_every_preset_only_uses_real_keys():

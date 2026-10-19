@@ -3,6 +3,7 @@ import { constraintsApi, timetableApi } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { DAYS, DAY_LABELS, DEFAULT_SLOTS, ScheduleSlot, timeLabel } from '../utils/schedule';
 import { CalendarPlus } from 'lucide-react';
+import { CustomFilterView } from '../components/CustomFilterView';
 
 interface Entry {
   id: number;
@@ -21,6 +22,7 @@ export function MyTimetable() {
   const [error, setError] = useState<string | null>(null);
   const [slots, setSlots] = useState<ScheduleSlot[]>(DEFAULT_SLOTS);
   const [calendarError, setCalendarError] = useState('');
+  const [tab, setTab] = useState<'week' | 'custom'>('week');
 
   const handleAddToCalendar = async () => {
     setCalendarError('');
@@ -52,11 +54,37 @@ export function MyTimetable() {
   if (error) return <div className="text-sm text-red-600">{error}</div>;
   if (entries === null) return <div className="text-sm text-gray-500">Loading...</div>;
 
+  const tabBar = (
+    <div className="flex gap-2 mb-6">
+      {([['week', 'My Week'], ['custom', 'Custom Filter']] as const).map(([key, label]) => (
+        <button
+          key={key} onClick={() => setTab(key)}
+          className={`px-4 py-2 rounded-lg text-sm transition-colors ${tab === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (tab === 'custom') {
+    return (
+      <div>
+        <h1 className="text-lg font-bold text-gray-900 mb-4">My Timetable</h1>
+        {tabBar}
+        <CustomFilterView />
+      </div>
+    );
+  }
+
   if (entries.length === 0) {
     return (
-      <div className="text-sm text-gray-500">
-        No published timetable yet. Once the department admin generates a
-        timetable, your {user?.role === 'FACULTY' ? 'teaching schedule' : 'class schedule'} will appear here.
+      <div>
+        {tabBar}
+        <div className="text-sm text-gray-500">
+          No published timetable yet. Once the department admin generates a
+          timetable, your {user?.role === 'TEACHER' ? 'teaching schedule' : 'class schedule'} will appear here.
+        </div>
       </div>
     );
   }
@@ -74,7 +102,7 @@ export function MyTimetable() {
         <div>
           <h1 className="text-lg font-bold text-gray-900 mb-1">My Timetable</h1>
           <p className="text-sm text-gray-500">
-            {user?.role === 'FACULTY' ? 'Your teaching schedule.' : 'Your class schedule.'}
+            {user?.role === 'TEACHER' ? 'Your teaching schedule.' : 'Your class schedule.'}
           </p>
         </div>
         <button
@@ -86,6 +114,7 @@ export function MyTimetable() {
         </button>
       </div>
       {calendarError && <p className="mb-4 text-sm text-red-600">{calendarError}</p>}
+      {tabBar}
 
       <div className="overflow-x-auto">
         <table className="min-w-full border border-gray-200 text-sm">

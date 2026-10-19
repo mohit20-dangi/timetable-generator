@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { sectionsApi, subjectsApi, constraintsApi, yearsApi, subjectTypesApi } from '../api/client';
-import { Section, Subject, AcademicYear, SubjectType } from '../types';
+import { Section, Subject, AcademicYear, SubjectType, SectionSubject, LabBatch } from '../types';
 import { Search, Copy, Plus, X, AlertTriangle } from 'lucide-react';
+import { sectionLabel } from '../utils/sectionLabel';
 
 /** Phase 3.3: replaces the old "one column per subject" matrix. A section
  * on the left, its assigned subjects on the right, with a copy-from-another-
@@ -22,6 +23,18 @@ export function CurriculumPage() {
   const [copyFrom, setCopyFrom] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  // Every section's subject rows, so a repeater section can be pointed at a
+  // host section that actually teaches the subject.
+  const [rows, setRows] = useState<SectionSubject[]>([]);
+  const [labBatches, setLabBatches] = useState<LabBatch[]>([]);
+
+  const refreshRows = () =>
+    constraintsApi.getAllSectionSubjects().then((res) => setRows(res.data)).catch(() => undefined);
+
+  useEffect(() => {
+    refreshRows();
+    constraintsApi.getAllLabBatches().then((res) => setLabBatches(res.data)).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     Promise.all([sectionsApi.list(), subjectsApi.list(), yearsApi.list(), subjectTypesApi.list(), constraintsApi.listTimeSlots()])
@@ -77,12 +90,31 @@ export function CurriculumPage() {
       if (isAssigned) {
         await constraintsApi.removeSectionSubject(selectedSection, subjectId);
         setAssigned((current) => ({ ...current, [selectedSection]: current[selectedSection].filter((id) => id !== subjectId) }));
+        refreshRows();
       } else {
         await constraintsApi.addSectionSubject({ section_id: selectedSection, subject_id: subjectId });
         setAssigned((current) => ({ ...current, [selectedSection]: [...(current[selectedSection] || []), subjectId] }));
+        refreshRows();
       }
     } catch (err: any) {
       setError(err?.response?.data?.detail || 'Could not update this assignment.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const selectedSectionRecord = sections.find((s) => s.id === selectedSection);
+  const sectionRows = rows.filter((r) => r.section_id === selectedSection);
+  const showAttendance = !!selectedSectionRecord?.is_repeater || sectionRows.some((r) => r.attends_with_section_id);
+
+  const changeAttendance = async (subjectId: string, hostId: string, batchId: string) => {
+    setBusy(true);
+    setError('');
+    try {
+      await constraintsApi.setAttendance(selectedSection, subjectId, hostId || null, batchId || null);
+      await refreshRows();
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'Could not change which class this section sits in.');
     } finally {
       setBusy(false);
     }
@@ -170,7 +202,7 @@ export function CurriculumPage() {
                 <div className="flex items-center gap-1 ml-auto">
                   <select value={copyFrom} onChange={(e) => setCopyFrom(e.target.value)} className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm">
                     <option value="">Copy from section...</option>
-                    {sections.filter((s) => s.id !== selectedSection).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    {sections.filter((s) => s.id !== selectedSection).map((s) => <option key={s.id} value={s.id}>{sectionLabel(s, years)}</option>)}
                   </select>
                   <button onClick={copyFromSection} disabled={!copyFrom || busy} className="flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
                     <Copy size={14} /> Copy
@@ -200,6 +232,54 @@ export function CurriculumPage() {
                 })}
                 {filteredSubjects.length === 0 && <p className="text-sm text-gray-500 col-span-2">No subjects match.</p>}
               </div>
+
+              {showAttendance && sectionRows.length > 0 && (
+                <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50/50 p-4">
+                  <h2 className="font-semibold text-gray-900">Classes this section sits in</h2>
+                  <p className="mb-3 text-sm text-gray-600">
+                    For each subject, either give this section its own class, or have it sit in another section's
+                    class. The timetable then keeps those classes from clashing with this section's own.
+                  </p>
+                  <div className="space-y-2">
+                    {sectionRows.map((row) => {
+                      const subject = subjectById[row.subject_id];
+                      const hosts = rows.filter(
+                        (r) => r.subject_id === row.subject_id && r.section_id !== selectedSection && !r.attends_with_section_id,
+                      );
+                      const hostBatches = labBatches.filter((b) => b.section_id === row.attends_with_section_id);
+                      return (
+                        <div key={row.subject_id} className="flex flex-wrap items-center gap-2 text-sm">
+                          <span className="w-56 font-medium text-gray-900">{subject?.name || row.subject_id}</span>
+                          <select
+                            value={row.attends_with_section_id || ''}
+                            disabled={busy}
+                            onChange={(e) => changeAttendance(row.subject_id, e.target.value, '')}
+                            className="rounded-lg border border-gray-300 px-2 py-1.5"
+                          >
+                            <option value="">Own class</option>
+                            {hosts.map((h) => (
+                              <option key={h.section_id} value={h.section_id}>
+                                Sits in {sections.find((s) => s.id === h.section_id)?.name || h.section_id}'s class
+                              </option>
+                            ))}
+                          </select>
+                          {subject?.type === 'lab' && row.attends_with_section_id && hostBatches.length > 0 && (
+                            <select
+                              value={row.attends_with_batch_id || ''}
+                              disabled={busy}
+                              onChange={(e) => changeAttendance(row.subject_id, row.attends_with_section_id!, e.target.value)}
+                              className="rounded-lg border border-gray-300 px-2 py-1.5"
+                            >
+                              <option value="">First batch</option>
+                              {hostBatches.map((b) => <option key={b.id} value={b.id}>Batch {b.batch_name}</option>)}
+                            </select>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </>
           ) : (
             <p className="text-sm text-gray-500">Select a section to assign subjects.</p>

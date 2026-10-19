@@ -3,8 +3,11 @@ import { NavLink, Outlet } from 'react-router-dom';
 import { CheckCircle2, Circle } from 'lucide-react';
 import {
   yearsApi, sectionsApi, subjectsApi, electiveGroupsApi, constraintsApi, teachersApi, roomsApi,
+  labRotationsApi,
 } from '../api/client';
-import { Section, Subject, AcademicYear, SectionSubject, LabBatch, ElectiveGroup } from '../types';
+import {
+  Section, Subject, AcademicYear, SectionSubject, LabBatch, ElectiveGroup, LabRotationGroup,
+} from '../types';
 
 interface StepStatus {
   complete: boolean;
@@ -18,6 +21,7 @@ interface SetupData {
   sectionSubjects: SectionSubject[];
   labBatches: LabBatch[];
   electiveGroups: (ElectiveGroup & { _infeasible: boolean })[];
+  labRotations: (LabRotationGroup & { _infeasible: boolean })[];
   qualificationsMap: Record<string, string[]>;
   teachersCount: number;
   roomsCount: number;
@@ -72,8 +76,35 @@ const STEPS: SetupStep[] = [
       return { complete: d.labBatches.length > 0, issueCount: missing };
     },
   },
+  {
+    path: 'lab-rotations', label: 'Lab Rotations',
+    status: (d) => {
+      // The issue worth surfacing here isn't "no rotations" - plenty of
+      // departments need none - but a lab left on a batch mode that makes
+      // every batch run at once, which is what quietly demands one
+      // qualified teacher per batch and blocks generation.
+      const inRotation = new Set(d.labRotations.flatMap((r) => r.subject_ids));
+      const simultaneous = d.subjects.filter(
+        (s) => s.type === 'lab' && !inRotation.has(s.id)
+          && (s.batch_scheduling_mode === 'parallel' || s.batch_scheduling_mode === 'independent'),
+      );
+      const understaffed = simultaneous.filter((s) => {
+        const batchesNeeded = Math.max(
+          ...d.sections.map((sec) => d.labBatches.filter((b) => b.section_id === sec.id).length),
+          0,
+        );
+        return batchesNeeded > 1 && (d.qualificationsMap[s.id] || []).length < batchesNeeded;
+      }).length;
+      return {
+        complete: d.labRotations.length > 0,
+        issueCount: d.labRotations.filter((r) => r._infeasible).length + understaffed,
+      };
+    },
+  },
   { path: 'teachers', label: 'Teachers', status: (d) => ({ complete: d.teachersCount > 0, issueCount: 0 }) },
   { path: 'rooms', label: 'Rooms', status: (d) => ({ complete: d.roomsCount > 0, issueCount: 0 }) },
+  { path: 'first-year', label: 'First-Year Locks', status: () => ({ complete: true, issueCount: 0 }) },
+  { path: 'ai-assistant', label: 'AI Setup Assistant', status: () => ({ complete: true, issueCount: 0 }) },
   { path: 'import', label: 'Import from Excel', status: () => ({ complete: true, issueCount: 0 }) },
 ];
 
@@ -90,8 +121,8 @@ export function SetupLayout() {
       yearsApi.list(), sectionsApi.list(), subjectsApi.list(),
       constraintsApi.getAllSectionSubjects(), constraintsApi.getAllLabBatches(),
       electiveGroupsApi.list(), subjectsApi.getTeacherQualificationsMap(),
-      teachersApi.list(), roomsApi.list(),
-    ]).then(async ([years, sections, subjects, sectionSubjects, labBatches, electiveGroups, qualMap, teachers, rooms]) => {
+      teachersApi.list(), roomsApi.list(), labRotationsApi.list(),
+    ]).then(async ([years, sections, subjects, sectionSubjects, labBatches, electiveGroups, qualMap, teachers, rooms, labRotations]) => {
       // Feasibility needs one preflight call per basket with 2+ offered
       // options - baskets are few per department, so this stays cheap.
       const groups: ElectiveGroup[] = electiveGroups.data;
@@ -104,11 +135,21 @@ export function SetupLayout() {
           return { ...g, _infeasible: false };
         }
       }));
+      const rotations: LabRotationGroup[] = labRotations.data;
+      const rotationsWithFeasibility = await Promise.all(rotations.map(async (r) => {
+        try {
+          const preflight = await labRotationsApi.preflight(r.id);
+          return { ...r, _infeasible: !preflight.data.feasible };
+        } catch {
+          return { ...r, _infeasible: false };
+        }
+      }));
       if (cancelled) return;
       setData({
         years: years.data, sections: sections.data, subjects: subjects.data,
         sectionSubjects: sectionSubjects.data, labBatches: labBatches.data,
         electiveGroups: withFeasibility, qualificationsMap: qualMap.data,
+        labRotations: rotationsWithFeasibility,
         teachersCount: teachers.data.length, roomsCount: rooms.data.length,
       });
     }).catch(() => setData(null));

@@ -23,5 +23,8 @@ class Teacher(Base):
     # soft preference, not a hard cap like `availability`.
     preferred_slots = Column(JSON, default=list)
     is_guest_from_other_dept = Column(Boolean, default=False)
+    # Hours/week this teacher gives to the first-year timetable the central
+    # office runs. Taken off max_weekly_hours when a timetable is generated.
+    first_year_hours = Column(Integer, default=0)
 
     department = relationship("Department", backref="teachers")

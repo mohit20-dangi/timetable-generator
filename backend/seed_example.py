@@ -151,14 +151,10 @@ post("/api/constraints/profiles", {
     },
 })
 
-print("\nRegistering a faculty login and a student login...")
+print("\nRegistering a faculty login...")
 post("/api/auth/register", {
     "email": "sharma@college.edu", "password": "ChangeThisPassword123!", "full_name": "Prof. Sharma",
     "role": "FACULTY", "teacher_id": "t_sharma",
-})
-post("/api/auth/register", {
-    "email": "student1@college.edu", "password": "ChangeThisPassword123!", "full_name": "A Student",
-    "role": "STUDENT", "section_id": "cse3a",
 })
 
 print("\nTriggering timetable generation (runs in the background)...")
@@ -186,8 +182,9 @@ if r.status_code == 200:
         pub = post(f"/api/timetable/runs/{run_id}/publish", {})
         if pub.status_code == 200:
             print(f"Run #{run_id} published - it's now the live timetable.")
-            print("Log in as sharma@college.edu / student1@college.edu (password: ChangeThisPassword123!)")
-            print("and GET /api/timetable/me to see each person's own scoped schedule.")
+            print("Log in as sharma@college.edu (password: ChangeThisPassword123!)")
+            print("and GET /api/timetable/me to see their own scoped schedule, or view")
+            print("GET /api/timetable/public/section/cse3a for the class timetable without logging in.")
     else:
         rr = requests.get(f"{BASE}/api/timetable/runs/{run_id}", headers=H).json()
         print(f"Generation did not complete. Explanation:\n{rr.get('llm_explanation')}")

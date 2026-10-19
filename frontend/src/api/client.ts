@@ -1,4 +1,5 @@
 import axios from 'axios';
+import type { FirstYearApplyRow, FirstYearManualLock } from '../types';
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
@@ -13,6 +14,14 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers = config.headers ?? {};
     config.headers.Authorization = `Bearer ${token}`;
+  }
+  // The department picked in the sidebar. Only the superadmin's requests
+  // use it (everyone else is pinned to their own department server-side);
+  // see app.auth.scope.active_department on the backend.
+  const departmentId = localStorage.getItem('active_department_id');
+  if (departmentId) {
+    config.headers = config.headers ?? {};
+    config.headers['X-Department-Id'] = departmentId;
   }
   return config;
 });
@@ -53,15 +62,11 @@ export const authApi = {
     api.patch(`/auth/users/${id}/active`, null, { params: { is_active: isActive } }),
 };
 
-export const institutionsApi = {
-  list: () => api.get('/institutions/'),
-  create: (data: any) => api.post('/institutions/', data),
-  delete: (id: string) => api.delete(`/institutions/${id}`),
-};
 
 export const departmentsApi = {
   list: () => api.get('/departments/'),
   create: (data: any) => api.post('/departments/', data),
+  update: (id: string, data: { name: string; code?: string | null }) => api.put(`/departments/${id}`, data),
   delete: (id: string) => api.delete(`/departments/${id}`),
 };
 
@@ -137,6 +142,11 @@ export const constraintsApi = {
   addSectionSubject: (data: any) => api.post('/constraints/section-subjects', data),
   getSectionSubjects: (sectionId: string) => api.get(`/constraints/section-subjects/${sectionId}`),
   removeSectionSubject: (sectionId: string, subjectId: string) => api.delete(`/constraints/section-subjects/${sectionId}/${subjectId}`),
+  /** Make a (repeater) section sit in another section's class for a subject; both ids null stops it. */
+  setAttendance: (sectionId: string, subjectId: string, hostSectionId: string | null, hostBatchId: string | null = null) =>
+    api.put(`/constraints/section-subjects/${sectionId}/${subjectId}/attends-with`, {
+      attends_with_section_id: hostSectionId, attends_with_batch_id: hostBatchId,
+    }),
 
   // Lab Batches
   createLabBatch: (data: any) => api.post('/constraints/lab-batches', data),
@@ -153,8 +163,12 @@ export const constraintsApi = {
   
   // Time Slots
   createTimeSlot: (data: any) => api.post('/constraints/time-slots', data),
-  listTimeSlots: () => api.get('/constraints/time-slots'),
+  /** kind: regular (default, the main timetable's periods), remedial, or all. */
+  listTimeSlots: (kind: 'regular' | 'remedial' | 'all' = 'regular') => api.get('/constraints/time-slots', { params: { kind } }),
   deleteTimeSlot: (id: string) => api.delete(`/constraints/time-slots/${id}`),
+  updateTimeSlot: (id: string, data: any) => api.put(`/constraints/time-slots/${id}`, data),
+  /** Saves the whole bell schedule at once; the server numbers the periods. */
+  replaceTimeSlots: (data: any) => api.put('/constraints/time-slots', data),
   
   // Constraint Profiles
   createProfile: (data: any) => api.post('/constraints/profiles', data),
@@ -166,6 +180,14 @@ export const constraintsApi = {
   // LLM
   parseNL: (text: string) => api.post('/constraints/parse-nl', { text }),
   prototype: (text: string) => api.post('/constraints/prototype', { text }),
+};
+
+export const labRotationsApi = {
+  list: (sectionId?: string) => api.get('/lab-rotations/', { params: sectionId ? { section_id: sectionId } : {} }),
+  create: (data: any) => api.post('/lab-rotations/', data),
+  update: (id: string, data: any) => api.put(`/lab-rotations/${id}`, data),
+  delete: (id: string) => api.delete(`/lab-rotations/${id}`),
+  preflight: (id: string) => api.get(`/lab-rotations/${id}/preflight`),
 };
 
 export const electiveGroupsApi = {
@@ -190,21 +212,48 @@ export const aiAgentApi = {
 };
 
 export const bulkImportApi = {
-  previewExcel: (file: File) => {
+  // departmentId: where a department load workbook (which has no ids of
+  // its own) is imported to. Template workbooks carry department_id per row.
+  previewExcel: (file: File, departmentId?: string) => {
     const formData = new FormData();
     formData.append('file', file);
+    if (departmentId) formData.append('department_id', departmentId);
     return api.post('/import/excel/preview', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
-  uploadExcel: (file: File) => {
+  uploadExcel: (file: File, departmentId?: string) => {
     const formData = new FormData();
     formData.append('file', file);
+    if (departmentId) formData.append('department_id', departmentId);
     return api.post('/import/excel', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
   downloadTemplate: () => api.get('/import/excel-template', { responseType: 'blob' }),
+  downloadCollegeTemplate: () => api.get('/import/college-template', { responseType: 'blob' }),
+};
+
+export const firstYearImportApi = {
+  // Reading a scanned PDF with OCR takes a while (minutes for 8 pages on a
+  // CPU), so this call must not use the short default timeout.
+  preview: (file: File, departmentId: string) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('department_id', departmentId);
+    return api.post('/first-year-import/preview', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 20 * 60 * 1000,
+    });
+  },
+  apply: (departmentId: string, rows: FirstYearApplyRow[]) =>
+    api.post('/first-year-import/apply', { department_id: departmentId, rows }),
+  addManual: (lock: FirstYearManualLock) => api.post('/first-year-import/manual', lock),
+  removeOne: (departmentId: string, lockId: number) =>
+    api.delete(`/first-year-import/${lockId}`, { params: { department_id: departmentId } }),
+  list: (departmentId: string) => api.get('/first-year-import', { params: { department_id: departmentId } }),
+  tiles: (departmentId: string) => api.get('/first-year-import/tiles', { params: { department_id: departmentId } }),
+  clear: (departmentId: string) => api.delete('/first-year-import', { params: { department_id: departmentId } }),
 };
 
 export const timetableApi = {
@@ -238,9 +287,61 @@ export const timetableApi = {
   deleteRun: (runId: number) => api.delete(`/timetable/runs/${runId}`),
 };
 
+// Manual timetable editor. Mutations are conflict-gated server-side: a change
+// that would introduce a clash is refused with HTTP 409 and
+// detail.violations = [{type, message}].
+const editorPath = (runId: number, path: string) => `/timetable/runs/${runId}/editor/${path}`;
+export const timetableEditorApi = {
+  openDraft: (runId: number) => api.post(editorPath(runId, 'draft')),
+  check: (runId: number, operations: any[]) => api.post(editorPath(runId, 'check'), { operations }),
+  apply: (runId: number, operations: any[], reason?: string) => api.post(editorPath(runId, 'apply'), { operations, reason }),
+  slotMap: (runId: number, sessionGroup: string, view: string, entityId: string) =>
+    api.get(editorPath(runId, 'slot-map'), { params: { session_group: sessionGroup, view, entity_id: entityId } }),
+  options: (runId: number, sessionGroup: string, scope: 'session' | 'all_sessions' = 'all_sessions') =>
+    api.get(editorPath(runId, 'options'), { params: { session_group: sessionGroup, scope } }),
+  freeSlots: (runId: number, sessionGroup: string, limit = 5) =>
+    api.get(editorPath(runId, 'free-slots'), { params: { session_group: sessionGroup, limit } }),
+  history: (runId: number) => api.get(editorPath(runId, 'history')),
+  undo: (runId: number) => api.post(editorPath(runId, 'undo')),
+  redo: (runId: number) => api.post(editorPath(runId, 'redo')),
+};
+
+export const remedialApi = {
+  listGroups: () => api.get('/remedial/groups'),
+  createGroup: (data: any) => api.post('/remedial/groups', data),
+  updateGroup: (id: string, data: any) => api.put(`/remedial/groups/${id}`, data),
+  deleteGroup: (id: string) => api.delete(`/remedial/groups/${id}`),
+  generate: (data: any) => api.post('/remedial/runs', data),
+  listRuns: () => api.get('/remedial/runs'),
+  getRun: (id: number) => api.get(`/remedial/runs/${id}`),
+  getEntries: (id: number) => api.get(`/remedial/runs/${id}/entries`),
+  getSectionView: (id: number) => api.get(`/remedial/runs/${id}/section-view`),
+  publish: (id: number) => api.post(`/remedial/runs/${id}/publish`),
+  deleteRun: (id: number) => api.delete(`/remedial/runs/${id}`),
+  export: (id: number) => api.get(`/remedial/runs/${id}/export`, { responseType: 'blob' }),
+};
+
+export const publicTimetableApi = {
+  listSections: () => api.get('/timetable/public/sections'),
+  getSectionView: (sectionId: string) => api.get(`/timetable/public/section/${sectionId}/view`),
+  download: (sectionId: string, format: 'pdf' | 'xlsx' | 'ics') =>
+    api.get(`/timetable/public/section/${sectionId}/export`, { params: { format }, responseType: 'blob' }),
+};
+
 export const adminDataApi = {
   reset: (scope: string) => api.post(`/admin/data/reset/${scope}`),
   previewReset: (scope: string) => api.get(`/admin/data/reset/${scope}/preview`),
 };
 
 export default api;
+
+export const customFilterApi = {
+  parse: (query: string, runId?: number) =>
+    api.post('/custom-filters/parse', { query, ...(runId ? { run_id: runId } : {}) }),
+  evaluate: (spec: any, runId?: number) =>
+    api.post('/custom-filters/evaluate', { spec, ...(runId ? { run_id: runId } : {}) }),
+  listSaved: () => api.get('/custom-filters/saved'),
+  save: (body: { name: string; description?: string; original_query?: string; spec: any }) =>
+    api.post('/custom-filters/saved', body),
+  deleteSaved: (id: string) => api.delete(`/custom-filters/saved/${id}`),
+};

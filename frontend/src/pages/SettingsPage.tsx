@@ -1,17 +1,15 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Clock, CalendarRange, Building2, AlertTriangle, ChevronRight, Users } from 'lucide-react';
+import { Clock, CalendarRange, AlertTriangle, ChevronRight, Users } from 'lucide-react';
 import { ScheduleSettings } from '../components/ScheduleSettings';
 import { AcademicTermForm } from '../components/AcademicTermForm';
-import { DepartmentSetup } from '../components/DepartmentSetup';
 import { UserManagement } from '../components/UserManagement';
 
-type Tab = 'schedule' | 'terms' | 'departments' | 'users';
+type Tab = 'schedule' | 'terms' | 'users';
 
 const TABS: { id: Tab; label: string; icon: typeof Clock }[] = [
   { id: 'schedule', label: 'Bell schedule', icon: Clock },
   { id: 'terms', label: 'Term dates', icon: CalendarRange },
-  { id: 'departments', label: 'Departments', icon: Building2 },
   { id: 'users', label: 'Users & roles', icon: Users },
 ];
 
@@ -22,7 +20,7 @@ export function SettingsPage() {
     <div className="max-w-4xl mx-auto">
       <div className="mb-6">
         <h1 className="text-3xl font-bold text-gray-900">Settings</h1>
-        <p className="text-gray-600">Bell schedule, term dates, and department management.</p>
+        <p className="text-gray-600">Bell schedule, term dates and user accounts for the department you're working in.</p>
       </div>
 
       <div className="mb-6 flex flex-wrap gap-2 border-b border-gray-200">
@@ -45,7 +43,6 @@ export function SettingsPage() {
       <div className="bg-white rounded-lg border border-gray-200 p-6 mb-6">
         {tab === 'schedule' && <ScheduleSettings />}
         {tab === 'terms' && <AcademicTermForm />}
-        {tab === 'departments' && <DepartmentSetup />}
         {tab === 'users' && <UserManagement />}
       </div>
 

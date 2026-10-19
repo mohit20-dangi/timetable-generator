@@ -32,6 +32,9 @@ from app.models import (
     AcademicYear, AcademicTerm, Department, TimetableRun,
 )
 from app.solver.calendar import DAY_ORDER
+from app.services.entry_teachers import entry_teacher_ids
+from app.services.department_calendar import department_time_slots
+from app.services.section_attendance import by_host, default_batch_by_section, list_attendance, repeaters_attending
 
 HEADER_FILL = "1E3A5F"
 LUNCH_FILL = "F3F4F6"
@@ -71,6 +74,32 @@ def _entity_label(ref: dict, db: Session, entity_type: str, entity_id: str) -> s
     return room.name if room else entity_id
 
 
+def _attended_entries(db: Session, run_id: int, rank: int, run_entries: List[GeneratedEntry], section_id: str) -> List[GeneratedEntry]:
+    """Host classes a repeater section sits in, so its timetable shows them.
+    A host's class normally comes from this same run; one whose section is
+    not in this run comes from the published timetable instead."""
+    links = [link for link in list_attendance(db) if link.repeater_section_id == section_id]
+    if not links:
+        return []
+    batch_parent = {b.id: b.section_id for b in db.query(LabBatch).all()}
+    run_sections = {e.section_id or batch_parent.get(e.batch_id) for e in run_entries}
+    pool = list(run_entries)
+    published_elsewhere = (
+        db.query(GeneratedEntry).join(TimetableRun, GeneratedEntry.timetable_run_id == TimetableRun.id)
+        .filter(TimetableRun.is_published.is_(True), GeneratedEntry.alternative_rank == 1,
+                GeneratedEntry.timetable_run_id != run_id).all()
+    )
+    pool += [e for e in published_elsewhere if (e.section_id or batch_parent.get(e.batch_id)) not in run_sections]
+    links_by_host = by_host(links)
+    default_batch = default_batch_by_section(db)
+    return [
+        e for e in pool
+        if section_id in repeaters_attending(
+            links_by_host, default_batch, e.section_id or batch_parent.get(e.batch_id), e.subject_id, e.batch_id,
+        )
+    ]
+
+
 def _gather_grid(db: Session, run_id: int, rank: int, entity_type: str, entity_id: str):
     entries = (
         db.query(GeneratedEntry)
@@ -79,13 +108,19 @@ def _gather_grid(db: Session, run_id: int, rank: int, entity_type: str, entity_i
     )
     if entity_type == "section":
         batch_ids = {b.id for b in db.query(LabBatch).filter(LabBatch.section_id == entity_id).all()}
+        all_run_entries = entries
         entries = [e for e in entries if e.section_id == entity_id or e.batch_id in batch_ids]
+        entries += _attended_entries(db, run_id, rank, all_run_entries, entity_id)
     elif entity_type == "teacher":
-        entries = [e for e in entries if e.teacher_id == entity_id]
+        # Includes labs where this teacher is the SECOND supervisor - a
+        # printed teacher timetable that left those out would show them as
+        # free during a class they are required to be in.
+        entries = [e for e in entries if entity_id in entry_teacher_ids(e)]
     elif entity_type == "room":
         entries = [e for e in entries if e.room_id == entity_id]
 
-    slots = sorted(db.query(TimeSlot).all(), key=lambda t: (DAY_ORDER.index(t.day) if t.day in DAY_ORDER else 99, t.period_index))
+    run = db.get(TimetableRun, run_id)
+    slots = sorted(department_time_slots(db, run.department_id if run else None), key=lambda t: (DAY_ORDER.index(t.day) if t.day in DAY_ORDER else 99, t.period_index))
     days = sorted({s.day for s in slots}, key=lambda d: DAY_ORDER.index(d) if d in DAY_ORDER else 99)
     periods = sorted({s.period_index for s in slots})
 
@@ -112,6 +147,7 @@ def _gather_grid(db: Session, run_id: int, rank: int, entity_type: str, entity_i
             }
 
     return {
+        "entity_id": entity_id,
         "days": days, "periods": periods, "grid": grid, "slot_lookup": slot_lookup,
         "lunch_by_day": lunch_by_day, "entity_label": _entity_label(ref, db, entity_type, entity_id),
         **ref,
@@ -150,10 +186,21 @@ def _cell_blocks(entries: List[GeneratedEntry], ctx: dict, entity_type: str) -> 
             if e.batch_id:
                 batch = ctx["batches"].get(e.batch_id)
                 lines.append(batch.batch_name if batch else e.batch_id)
+            # A repeater section sits in other sections' classes: say whose.
+            batch = ctx["batches"].get(e.batch_id) if e.batch_id else None
+            owner_id = e.section_id or (batch.section_id if batch else None)
+            if owner_id and owner_id != ctx.get("entity_id"):
+                owner = ctx["sections"].get(owner_id)
+                lines.append(f"with {owner.name if owner else owner_id}")
         detail_parts = []
         if entity_type != "teacher":
-            teacher = ctx["teachers"].get(e.teacher_id)
-            detail_parts.append(teacher.initials if teacher and teacher.initials else (e.teacher_id or ""))
+            # Every teacher in the room is printed, so a co-taught lab's cell
+            # reads "AB + CD" rather than quietly naming only the lead.
+            labels = []
+            for tid in entry_teacher_ids(e):
+                teacher = ctx["teachers"].get(tid)
+                labels.append(teacher.initials if teacher and teacher.initials else tid)
+            detail_parts.append(" + ".join(labels))
         if entity_type != "room":
             room = ctx["rooms"].get(e.room_id)
             detail_parts.append(room.name if room else (e.room_id or ""))
@@ -204,7 +251,7 @@ def _day_row_spans(ctx: dict, day: str) -> List[tuple]:
 
 def _legend_data(ctx: dict, entries_seen: List[GeneratedEntry]):
     subject_ids = sorted({e.subject_id for e in entries_seen if e.subject_id})
-    teacher_ids = sorted({e.teacher_id for e in entries_seen if e.teacher_id})
+    teacher_ids = sorted({tid for e in entries_seen for tid in entry_teacher_ids(e)})
     subject_rows = []
     for sid in subject_ids:
         subject = ctx["subjects"].get(sid)
@@ -222,6 +269,70 @@ def _department_name(db: Session, run_id: int) -> str:
         return ""
     department = db.query(Department).filter(Department.id == run.department_id).first()
     return department.name if department else ""
+
+
+def build_section_view(db: Session, run_id: int, section_id: str) -> dict:
+    """JSON-friendly rendering of one section's timetable, reusing the exact
+    same grid/merge/legend/lunch logic as the PDF and Excel exporters above
+    (via _gather_grid/_day_row_spans/_cell_blocks/_legend_data), so the
+    public no-login timetable page matches the printed format instead of a
+    bare list of raw subject/teacher/room ids."""
+    ctx = _gather_grid(db, run_id, 1, "section", section_id)
+    department_name = _department_name(db, run_id)
+
+    day_spans = {day: _day_row_spans(ctx, day) for day in ctx["days"]}
+    span_start_for: Dict[tuple, int] = {}
+    for day, spans in day_spans.items():
+        for start, end in spans:
+            for idx in range(start, end + 1):
+                span_start_for[(day, idx)] = start
+
+    period_times: Dict[int, str] = {}
+    for period in ctx["periods"]:
+        sample_slot = next(
+            (ctx["slot_lookup"].get((d, period)) for d in ctx["days"] if (d, period) in ctx["slot_lookup"]), None,
+        )
+        period_times[period] = (
+            f"{sample_slot.start_time.strftime('%H:%M')}-{sample_slot.end_time.strftime('%H:%M')}" if sample_slot else ""
+        )
+
+    cells = []
+    entries_seen: List[GeneratedEntry] = []
+    for period_idx, period in enumerate(ctx["periods"]):
+        for day in ctx["days"]:
+            entries = ctx["grid"].get((day, period), [])
+            if not entries and _is_lunch_cell(ctx, day, period):
+                cells.append({"day": day, "period": period, "is_lunch": True, "covered": False, "span": 1, "color": None, "blocks": []})
+                continue
+
+            covered_from = span_start_for.get((day, period_idx))
+            if covered_from is not None and covered_from != period_idx:
+                cells.append({"day": day, "period": period, "is_lunch": False, "covered": True, "span": 1, "color": None, "blocks": []})
+                continue
+
+            entries_seen.extend(entries)
+            span = 1
+            if covered_from == period_idx:
+                span_end = next(end for (start, end) in day_spans[day] if start == period_idx)
+                span = span_end - period_idx + 1
+            subject_type = _subject_type(entries, ctx)
+            cells.append({
+                "day": day, "period": period, "is_lunch": False, "covered": False, "span": span,
+                "color": ctx["subject_type_colors"].get(subject_type) if subject_type else None,
+                "blocks": _cell_blocks(entries, ctx, "section"),
+            })
+
+    subject_rows, teacher_rows = _legend_data(ctx, entries_seen)
+
+    return {
+        "section_label": ctx["entity_label"],
+        "department_name": department_name,
+        "days": ctx["days"],
+        "periods": ctx["periods"],
+        "period_times": period_times,
+        "cells": cells,
+        "legend": {"subjects": subject_rows, "teachers": teacher_rows},
+    }
 
 
 def export_xlsx(db: Session, run_id: int, rank: int, entity_type: str, entity_id: str, title: str) -> bytes:
@@ -593,19 +704,22 @@ def _build_ics_events(cal: Calendar, entries: List[GeneratedEntry], ctx: dict, t
             event.add("dtstart", start_dt)
             event.add("dtend", end_dt)
             event.add("rrule", rrule)
-            teacher = ctx["teachers"].get(entry.teacher_id)
+            names = [
+                (ctx["teachers"].get(tid).name if ctx["teachers"].get(tid) else tid)
+                for tid in entry_teacher_ids(entry)
+            ]
             room = ctx["rooms"].get(entry.room_id)
             if room:
                 event.add("location", room.name)
-            if teacher:
-                event.add("description", f"Teacher: {teacher.name}")
+            if names:
+                event.add("description", f"Teacher: {', '.join(names)}")
             event.add("uid", f"{run_id}-{entry.id}@timetable-generator")
             cal.add_component(event)
 
 
 def export_ics(
     db: Session, run_id: int, rank: int, entity_type: str, entity_id: str,
-    weeks: int = 15, term: Optional["AcademicTerm"] = None,
+    weeks: int = 15, term: Optional["AcademicTerm"] = None, department_id: Optional[str] = None,
 ) -> bytes:
     """Weekly-recurring calendar events for one run. When the run is linked
     to an AcademicTerm (Phase 1.7), events start on the term's first
@@ -624,14 +738,14 @@ def export_ics(
 
 def export_ics_from_entries(
     db: Session, entries: List[GeneratedEntry], entity_type: str,
-    weeks: int = 15, term: Optional["AcademicTerm"] = None,
+    weeks: int = 15, term: Optional["AcademicTerm"] = None, department_id: Optional[str] = None,
 ) -> bytes:
     """Phase 4.3: the student/faculty "My Timetable" calendar feed - built
     directly from an arbitrary (already-filtered-to-one-person) entry list
     that may span several published runs, rather than one run+entity like
     the admin export above."""
     ref = _fetch_reference_data(db)
-    slots = db.query(TimeSlot).all()
+    slots = department_time_slots(db, department_id)
     ctx = {**ref, "slot_lookup": {(s.day, s.period_index): s for s in slots}}
     cal = Calendar()
     cal.add("prodid", "-//Timetable Generator//EN")

@@ -1,4 +1,4 @@
 @echo off
 cd /d %~dp0
-npm install
-npm run dev
+call npm install
+call npm run dev

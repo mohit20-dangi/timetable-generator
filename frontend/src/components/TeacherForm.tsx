@@ -1,3 +1,4 @@
+import { TimeInput } from './TimeInput';
 import { useState, useEffect } from 'react';
 import { teachersApi, subjectsApi, departmentsApi, constraintsApi } from '../api/client';
 import { Teacher, Subject, Department } from '../types';
@@ -7,6 +8,7 @@ import { DataTable } from './DataTable';
 import { HelpPopover } from './HelpPopover';
 import { DEFAULT_SLOTS, ScheduleSlot } from '../utils/schedule';
 import { validateWindows, validatePreferredWithinAvailability, validateWorkloadCaps } from '../utils/validation';
+import SelectAllButtons from './SelectAllButtons';
 
 export function TeacherForm() {
   const { departmentId } = useDepartment();
@@ -23,6 +25,8 @@ export function TeacherForm() {
     department_id: '',
     max_continuous_classes: 3,
     max_daily_classes: 5,
+    max_weekly_hours: 24,
+    first_year_hours: 0,
     availability: [] as Array<{ day: string; start: string; end: string }>,
     preferred_slots: [] as Array<{ day: string; slots: Array<{ start: string; end: string }> }>,
     is_guest_from_other_dept: false,
@@ -94,7 +98,7 @@ export function TeacherForm() {
   const resetForm = () => {
     setFormData({
       id: '', name: '', initials: '', department_id: departmentId || '',
-      max_continuous_classes: 3, max_daily_classes: 5,
+      max_continuous_classes: 3, max_daily_classes: 5, max_weekly_hours: 24, first_year_hours: 0,
       availability: [], preferred_slots: [],
       is_guest_from_other_dept: false, subjects: []
     });
@@ -109,6 +113,8 @@ export function TeacherForm() {
       department_id: teacher.department_id || '',
       max_continuous_classes: teacher.max_continuous_classes,
       max_daily_classes: teacher.max_daily_classes,
+      max_weekly_hours: teacher.max_weekly_hours ?? 24,
+      first_year_hours: teacher.first_year_hours ?? 0,
       availability: teacher.availability || [],
       preferred_slots: teacher.preferred_slots || [],
       is_guest_from_other_dept: teacher.is_guest_from_other_dept,
@@ -262,6 +268,27 @@ export function TeacherForm() {
                 />
                 <div className="mt-1"><HelpPopover>The most periods this teacher will be scheduled for in a single day, regardless of subject.</HelpPopover></div>
               </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Max Weekly Hours</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={formData.max_weekly_hours}
+                  onChange={(e) => setFormData({ ...formData, max_weekly_hours: Number(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">First-year load (hrs/week)</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={formData.first_year_hours}
+                  onChange={(e) => setFormData({ ...formData, first_year_hours: Number(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <div className="mt-1"><HelpPopover>Hours this teacher gives to the first-year timetable run by the central office. They are taken off Max Weekly Hours when a timetable is generated.</HelpPopover></div>
+              </div>
               <div className="flex items-end">
                 <label className="flex items-center gap-2">
                   <input
@@ -303,17 +330,15 @@ export function TeacherForm() {
                       <option key={day} value={day}>{day}</option>
                     ))}
                   </select>
-                  <input
-                    type="time"
+                  <TimeInput
                     value={slot.start}
-                    onChange={(e) => updateAvailabilitySlot(index, 'start', e.target.value)}
+                    onChange={(v) => updateAvailabilitySlot(index, 'start', v)}
                     className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
                   <span className="text-gray-500">to</span>
-                  <input
-                    type="time"
+                  <TimeInput
                     value={slot.end}
-                    onChange={(e) => updateAvailabilitySlot(index, 'end', e.target.value)}
+                    onChange={(v) => updateAvailabilitySlot(index, 'end', v)}
                     className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
                   <button
@@ -372,15 +397,14 @@ export function TeacherForm() {
                     <div className="space-y-2">
                       {daySlot.slots.map((slot, slotIndex) => (
                         <div key={slotIndex} className="flex items-center gap-2 mb-2 p-2 bg-gray-50 rounded">
-                          <input
-                            type="time"
+                          <TimeInput
                             value={slot.start}
-                            onChange={(e) => {
+                            onChange={(v) => {
                               const newPreferredSlots = [...formData.preferred_slots];
                               newPreferredSlots[dayIndex] = {
                                 ...newPreferredSlots[dayIndex],
                                 slots: [...newPreferredSlots[dayIndex].slots.map((s, i) =>
-                                  i === slotIndex ? { ...s, start: e.target.value } : s
+                                  i === slotIndex ? { ...s, start: v } : s
                                 )]
                               };
                               setFormData({ ...formData, preferred_slots: newPreferredSlots });
@@ -388,15 +412,14 @@ export function TeacherForm() {
                             className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                           />
                           <span className="text-gray-500">to</span>
-                          <input
-                            type="time"
+                          <TimeInput
                             value={slot.end}
-                            onChange={(e) => {
+                            onChange={(v) => {
                               const newPreferredSlots = [...formData.preferred_slots];
                               newPreferredSlots[dayIndex] = {
                                 ...newPreferredSlots[dayIndex],
                                 slots: [...newPreferredSlots[dayIndex].slots.map((s, i) =>
-                                  i === slotIndex ? { ...s, end: e.target.value } : s
+                                  i === slotIndex ? { ...s, end: v } : s
                                 )]
                               };
                               setFormData({ ...formData, preferred_slots: newPreferredSlots });
@@ -455,16 +478,9 @@ export function TeacherForm() {
 
             {/* Subjects */}
             <div>
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-4 mb-2">
                 <label className="block text-sm font-medium text-gray-700">Subjects this teacher can teach</label>
-                <div className="flex gap-3">
-                  <button type="button" onClick={selectAllSubjects} className="text-sm text-blue-600 hover:text-blue-800">
-                    Select all
-                  </button>
-                  <button type="button" onClick={clearAllSubjects} className="text-sm text-gray-500 hover:text-gray-700">
-                    Clear all
-                  </button>
-                </div>
+                <SelectAllButtons onSelectAll={selectAllSubjects} onClear={clearAllSubjects} />
               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                 {subjects.map((subject) => (

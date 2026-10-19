@@ -1,8 +1,11 @@
+import { TimeInput } from './TimeInput';
+import { formatTime } from '../utils/schedule';
 import { useState, useEffect } from 'react';
 import { yearsApi, sectionsApi } from '../api/client';
 import { AcademicYear, Section } from '../types';
 import { useDepartment } from '../context/DepartmentContext';
 import { Plus, Edit, Trash2, Save, X, Users } from 'lucide-react';
+import SelectAllButtons from './SelectAllButtons';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -77,11 +80,12 @@ export function AcademicYearForm() {
 
   const handleDelete = async (id: string) => {
     if (window.confirm('Are you sure you want to delete this academic year?')) {
+      setError('');
       try {
         await yearsApi.delete(id);
         fetchYears();
-      } catch (err) {
-        console.error('Failed to delete year:', err);
+      } catch (err: any) {
+        setError(err?.response?.data?.detail || 'Could not delete the academic year.');
       }
     }
   };
@@ -194,16 +198,9 @@ export function AcademicYearForm() {
             </div>
 
             <div>
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-4 mb-2">
                 <label className="block text-sm font-medium text-gray-700">Lunch break, per day</label>
-                <div className="flex gap-3">
-                  <button type="button" onClick={selectAllLunchDays} className="text-xs text-blue-600 hover:text-blue-800">
-                    Select all
-                  </button>
-                  <button type="button" onClick={clearAllLunchDays} className="text-xs text-gray-500 hover:text-gray-700">
-                    Clear all
-                  </button>
-                </div>
+                <SelectAllButtons onSelectAll={selectAllLunchDays} onClear={clearAllLunchDays} />
               </div>
               <p className="text-xs text-gray-500 mb-2">
                 Leave a day unchecked if it has no lunch break (e.g. a day that runs a class straight through).
@@ -223,19 +220,17 @@ export function AcademicYearForm() {
                         />
                         <span className="text-sm text-gray-700">{day}</span>
                       </label>
-                      <input
-                        type="time"
+                      <TimeInput
                         value={window[0]}
                         disabled={!enabled}
-                        onChange={(e) => setLunchTime(day, 0, e.target.value)}
+                        onChange={(v) => setLunchTime(day, 0, v)}
                         className="px-3 py-2 border border-gray-300 rounded-lg disabled:bg-gray-100"
                       />
                       <span className="text-gray-500">to</span>
-                      <input
-                        type="time"
+                      <TimeInput
                         value={window[1]}
                         disabled={!enabled}
-                        onChange={(e) => setLunchTime(day, 1, e.target.value)}
+                        onChange={(v) => setLunchTime(day, 1, v)}
                         className="px-3 py-2 border border-gray-300 rounded-lg disabled:bg-gray-100"
                       />
                     </div>
@@ -299,7 +294,7 @@ export function AcademicYearForm() {
                   </td>
                   <td className="px-4 py-2">
                     {Object.keys(year.lunch_windows || {}).length > 0
-                      ? Object.entries(year.lunch_windows).map(([day, w]) => `${day} ${w[0]}-${w[1]}`).join(', ')
+                      ? Object.entries(year.lunch_windows).map(([day, w]) => `${day} ${formatTime(w[0])}-${formatTime(w[1])}`).join(', ')
                       : 'Not set'}
                   </td>
                   <td className="px-4 py-2 text-right">

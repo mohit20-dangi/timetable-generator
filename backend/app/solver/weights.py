@@ -33,7 +33,35 @@ SOFT_RULE_KEYS = [
     "fair_teacher_workload",
     "parallel_lab_batches",
     "avoid_edge_periods",
+    # Implemented in app/solver/priority_rules.py (the test that checks
+    # every key is read scans that module as well as model_builder).
+    "limit_consecutive_teaching",
+    "cap_teacher_daily_periods",
+    "teacher_lighter_day",
+    "no_repeat_subject_same_day",
+    "spread_subject_across_week",
+    "heavy_subjects_early",
+    "balanced_theory_lab_days",
 ]
+
+# Numbers an admin can type in next to a rule (stored on
+# ConstraintProfile.rule_params, never a solver weight). The defaults are
+# what an untouched profile gets.
+RULE_PARAM_DEFAULTS: Dict[str, int] = {
+    "max_consecutive_teaching": 2,
+    "max_teacher_periods_per_day": 4,
+}
+
+
+def resolve_rule_params(raw) -> Dict[str, int]:
+    """Sanitises admin-entered numbers: anything missing, non-integer or
+    below 1 falls back to the default rather than reaching the solver."""
+    raw = raw or {}
+    resolved = {}
+    for key, default in RULE_PARAM_DEFAULTS.items():
+        value = raw.get(key, default)
+        resolved[key] = value if isinstance(value, int) and not isinstance(value, bool) and value >= 1 else default
+    return resolved
 
 # Plain-English description of each key, kept in lockstep with the
 # frontend's RULE_DEFINITIONS labels (ConstraintBuilder.tsx). This is the
@@ -48,6 +76,13 @@ SOFT_RULE_DESCRIPTIONS: Dict[str, str] = {
     "fair_teacher_workload": "Share teaching load fairly across faculty - don't let one teacher's week be much fuller than another's.",
     "parallel_lab_batches": "Run a section's lab batches at the same time (different rooms), not on different days.",
     "avoid_edge_periods": "Avoid scheduling classes in the very first or very last period of the day.",
+    "limit_consecutive_teaching": "Avoid more than a set number of lectures in a row for one teacher (the admin sets the number, default 2).",
+    "cap_teacher_daily_periods": "Don't pack one teacher's load into a single day - keep each teacher's periods per day under a set number (default 4).",
+    "teacher_lighter_day": "Try to leave each teacher one day with few or no classes.",
+    "no_repeat_subject_same_day": "Don't repeat a subject on the same day for a section (labs and double periods are exceptions).",
+    "spread_subject_across_week": "Spread each subject across the week, e.g. Mon/Wed/Fri rather than three days in a row.",
+    "heavy_subjects_early": "Put core, heavy subjects (3+ classes a week) in the morning rather than the afternoon.",
+    "balanced_theory_lab_days": "Avoid a day of only labs or only theory for a section.",
 }
 
 # The two rules that can actually be promoted to a hard constraint when
@@ -64,10 +99,17 @@ PRESETS: Dict[str, Dict[str, str]] = {
         "parallel_lab_batches": "very_important",
         "teacher_preferred_slots": "nice_to_have",
         "fair_teacher_workload": "nice_to_have",
+        "no_repeat_subject_same_day": "very_important",
+        "spread_subject_across_week": "very_important",
+        "heavy_subjects_early": "very_important",
+        "balanced_theory_lab_days": "very_important",
     },
     "teacher_friendly": {
         "teacher_preferred_slots": "very_important",
         "fair_teacher_workload": "very_important",
+        "limit_consecutive_teaching": "very_important",
+        "cap_teacher_daily_periods": "very_important",
+        "teacher_lighter_day": "very_important",
         "balance_load_across_days": "nice_to_have",
         "minimize_student_gaps": "nice_to_have",
         "parallel_lab_batches": "nice_to_have",

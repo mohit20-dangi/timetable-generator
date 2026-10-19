@@ -82,6 +82,7 @@ TOOLS = [
                         "enum": [
                             "teacher_unavailable", "room_unavailable", "section_unavailable",
                             "teacher_preferred", "batch_scheduling_mode", "custom",
+                            "subject_time_window", "max_subjects_per_day", "teacher_max_days_per_week",
                         ],
                     },
                     "target_type": {"type": "string", "enum": ["teacher", "room", "section", "subject"]},
@@ -101,6 +102,21 @@ TOOLS = [
                             "start_time/end_time are also set, the subject's batch sessions are additionally "
                             "confined to that window - use this for 'only merge/run them together during "
                             "period X because that's the only slot a teacher/room allows it'."
+                        ),
+                    },
+                    "weight": {
+                        "type": ["integer", "null"],
+                        "description": "Penalty per violation; REQUIRED (e.g. 10) when priority='soft' on the subject_time_window, max_subjects_per_day and teacher_max_days_per_week rule types.",
+                    },
+                    "params": {
+                        "type": ["object", "null"],
+                        "description": (
+                            "Template parameters. subject_time_window (target_type='subject'; needs start_time/"
+                            "end_time, day optional = every day): {\"mode\": \"within\"|\"avoid\"} - keep the "
+                            "subject inside, or out of, that window (e.g. 'Maths only in the morning' = within "
+                            "08:00-12:00). max_subjects_per_day (target_type='section', target_id a section id or "
+                            "'*' for all sections): {\"max\": N} different subjects per day. "
+                            "teacher_max_days_per_week (target_type='teacher'): {\"max\": N} working days a week."
                         ),
                     },
                     "description": {"type": "string"},

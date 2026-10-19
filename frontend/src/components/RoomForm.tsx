@@ -1,3 +1,4 @@
+import { TimeInput } from './TimeInput';
 import { useState, useEffect } from 'react';
 import { roomsApi, equipmentApi, departmentsApi, constraintsApi } from '../api/client';
 import { Room, Equipment, Department } from '../types';
@@ -207,7 +208,7 @@ export function RoomForm() {
                 onChange={(e) => setFormData({ ...formData, department_id: e.target.value })}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
-                <option value="">Shared / institution-wide</option>
+                <option value="">Shared by all departments</option>
                 {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
               <div className="mt-1"><HelpPopover>Leave this as "Shared" for central lecture halls or labs any department can book. Pick a department for a room that belongs to it - other departments can still use it if you lend it below.</HelpPopover></div>
@@ -282,23 +283,21 @@ export function RoomForm() {
                         <option key={day} value={day}>{day}</option>
                       ))}
                     </select>
-                    <input
-                      type="time"
+                    <TimeInput
                       value={slot.start}
-                      onChange={(e) => {
+                      onChange={(v) => {
                         const newAvailability = [...formData.availability];
-                        newAvailability[index] = { ...newAvailability[index], start: e.target.value };
+                        newAvailability[index] = { ...newAvailability[index], start: v };
                         setFormData({ ...formData, availability: newAvailability });
                       }}
                       className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                     <span className="text-gray-500">to</span>
-                    <input
-                      type="time"
+                    <TimeInput
                       value={slot.end}
-                      onChange={(e) => {
+                      onChange={(v) => {
                         const newAvailability = [...formData.availability];
-                        newAvailability[index] = { ...newAvailability[index], end: e.target.value };
+                        newAvailability[index] = { ...newAvailability[index], end: v };
                         setFormData({ ...formData, availability: newAvailability });
                       }}
                       className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"

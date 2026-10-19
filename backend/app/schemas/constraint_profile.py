@@ -6,6 +6,7 @@ class ConstraintProfileBase(BaseModel):
     name: str
     department_id: Optional[str] = None
     soft_constraint_weights: dict = {}
+    rule_params: Optional[dict] = None
 
 
 class ConstraintProfileCreate(ConstraintProfileBase):

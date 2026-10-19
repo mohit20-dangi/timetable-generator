@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = "https://openrouter.ai/api/v1"
     LLM_MODEL: str = "anthropic/claude-opus-4.5"
 
+    # First-year central timetable import runs PaddleOCR in a separate Python
+    # 3.11 process (Paddle does not support newer Pythons). Point this at that
+    # interpreter; leave blank to disable the feature with a clear message.
+    OCR_PYTHON: str = ""
+    OCR_TIMEOUT_SECONDS: int = 900
+
     # Solver defaults. All overridable per constraint profile / request;
     # these are only the fallback when a caller doesn't specify.
     SOLVER_MAX_SECONDS: int = 300

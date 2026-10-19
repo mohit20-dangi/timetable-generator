@@ -1,43 +1,45 @@
 import { useState, useEffect } from 'react';
-import { authApi, departmentsApi, teachersApi, sectionsApi } from '../api/client';
+import { authApi, departmentsApi, teachersApi } from '../api/client';
 import { Plus, UserPlus, ShieldCheck, ShieldOff } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { useDepartment } from '../context/DepartmentContext';
+import { GRANTABLE_ROLES, ROLE_DESCRIPTIONS, ROLE_LABELS, Role } from '../auth/roles';
 
 interface AccountUser {
   id: number;
   email: string;
   full_name: string;
-  role: 'ADMIN' | 'HOD' | 'FACULTY' | 'STUDENT';
+  role: Role;
   department_id: string | null;
   teacher_id: string | null;
   section_id: string | null;
   is_active: boolean;
 }
 
-const ROLE_LABELS: Record<AccountUser['role'], string> = {
-  ADMIN: 'Admin - full access',
-  HOD: 'HOD - edit own department\'s timetable',
-  FACULTY: 'Faculty - view own teaching schedule',
-  STUDENT: 'Student - view own class schedule',
-};
-
 /**
- * Roles govern what a signed-in account can see and change:
- * ADMIN edits everything, HOD edits only their own department's
- * timetable, FACULTY/STUDENT can only view their own schedule
- * (enforced server-side in every /api/timetable route, not just here).
+ * Accounts are only ever created by someone above them: the superadmin
+ * creates department admins (and anyone else), a department admin creates
+ * HOD and teacher accounts in their own department. Enforced server-side
+ * in /api/auth/register - this only hides options that would be refused.
+ * Class timetables need no account at all - see the public timetable page.
  */
 export function UserManagement() {
+  const { user } = useAuth();
+  const { departmentId } = useDepartment();
+  const grantable = user ? GRANTABLE_ROLES[user.role] : [];
+  const isSuperadmin = user?.role === 'SUPERADMIN';
+
   const [users, setUsers] = useState<AccountUser[]>([]);
   const [departments, setDepartments] = useState<{ id: string; name: string }[]>([]);
   const [teachers, setTeachers] = useState<{ id: string; name: string }[]>([]);
-  const [sections, setSections] = useState<{ id: string; name: string }[]>([]);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
-  const [form, setForm] = useState({
-    email: '', password: '', full_name: '', role: 'HOD' as AccountUser['role'],
-    department_id: '', teacher_id: '', section_id: '',
+  const emptyForm = () => ({
+    email: '', password: '', full_name: '', role: (grantable.includes('TEACHER') ? 'TEACHER' : grantable[0]) as Role,
+    department_id: departmentId, teacher_id: '',
   });
+  const [form, setForm] = useState(emptyForm);
 
   const refresh = async () => {
     const res = await authApi.listUsers();
@@ -48,13 +50,18 @@ export function UserManagement() {
     refresh();
     departmentsApi.list().then((res) => setDepartments(res.data)).catch(() => undefined);
     teachersApi.list().then((res) => setTeachers(res.data)).catch(() => undefined);
-    sectionsApi.list().then((res) => setSections(res.data)).catch(() => undefined);
   }, []);
+
+  const departmentName = (id: string | null) => departments.find((d) => d.id === id)?.name || id || '—';
 
   const createUser = async () => {
     setError(''); setMessage('');
     if (!form.email || !form.password || !form.full_name) {
       setError('Email, password, and name are required.');
+      return;
+    }
+    if (form.role === 'TEACHER' && !form.teacher_id) {
+      setError('Pick the teacher record this login belongs to.');
       return;
     }
     try {
@@ -63,12 +70,11 @@ export function UserManagement() {
         password: form.password,
         full_name: form.full_name,
         role: form.role,
-        department_id: form.role === 'HOD' ? form.department_id : undefined,
-        teacher_id: form.role === 'FACULTY' ? form.teacher_id : undefined,
-        section_id: form.role === 'STUDENT' ? form.section_id : undefined,
+        department_id: form.role === 'DEPT_ADMIN' || form.role === 'HOD' ? form.department_id : undefined,
+        teacher_id: form.role === 'TEACHER' ? form.teacher_id : undefined,
       });
-      setMessage(`${form.full_name} added as ${form.role}.`);
-      setForm({ email: '', password: '', full_name: '', role: form.role, department_id: '', teacher_id: '', section_id: '' });
+      setMessage(`${form.full_name} added as ${ROLE_LABELS[form.role]}.`);
+      setForm({ ...emptyForm(), role: form.role });
       refresh();
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Could not create the account.');
@@ -85,6 +91,8 @@ export function UserManagement() {
     }
   };
 
+  const needsDepartment = form.role === 'DEPT_ADMIN' || form.role === 'HOD';
+
   return (
     <div className="space-y-6">
       {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
@@ -93,35 +101,29 @@ export function UserManagement() {
       <div>
         <h3 className="flex items-center gap-2 text-lg font-semibold text-gray-900"><UserPlus size={20} /> Add an account</h3>
         <p className="text-sm text-gray-600 mb-3">
-          Give a teacher, department coordinator, or student login access - and control exactly what
-          they can see or change once signed in.
+          There's no self-signup: create the account here and give the person their email and temporary password.
+          {!isSuperadmin && ' You can add HOD and teacher accounts for your own department.'}
         </p>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <input placeholder="Full name" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} className="rounded-lg border border-gray-300 px-3 py-2" />
           <input placeholder="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="rounded-lg border border-gray-300 px-3 py-2" />
           <input placeholder="Temporary password" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="rounded-lg border border-gray-300 px-3 py-2" />
-          <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as AccountUser['role'] })} className="rounded-lg border border-gray-300 px-3 py-2">
-            {(Object.keys(ROLE_LABELS) as AccountUser['role'][]).map((r) => (
-              <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+          <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role })} className="rounded-lg border border-gray-300 px-3 py-2">
+            {grantable.map((r) => (
+              <option key={r} value={r}>{ROLE_LABELS[r]} - {ROLE_DESCRIPTIONS[r]}</option>
             ))}
           </select>
 
-          {form.role === 'HOD' && (
+          {needsDepartment && isSuperadmin && (
             <select value={form.department_id} onChange={(e) => setForm({ ...form, department_id: e.target.value })} className="rounded-lg border border-gray-300 px-3 py-2 md:col-span-2">
-              <option value="">Select the department they coordinate</option>
+              <option value="">Select their department</option>
               {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
           )}
-          {form.role === 'FACULTY' && (
+          {form.role === 'TEACHER' && (
             <select value={form.teacher_id} onChange={(e) => setForm({ ...form, teacher_id: e.target.value })} className="rounded-lg border border-gray-300 px-3 py-2 md:col-span-2">
               <option value="">Link to their teacher record</option>
               {teachers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
-          )}
-          {form.role === 'STUDENT' && (
-            <select value={form.section_id} onChange={(e) => setForm({ ...form, section_id: e.target.value })} className="rounded-lg border border-gray-300 px-3 py-2 md:col-span-2">
-              <option value="">Link to their section</option>
-              {sections.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
           )}
         </div>
@@ -139,7 +141,7 @@ export function UserManagement() {
                 <th className="py-2 pr-4">Name</th>
                 <th className="py-2 pr-4">Email</th>
                 <th className="py-2 pr-4">Role</th>
-                <th className="py-2 pr-4">Scope</th>
+                <th className="py-2 pr-4">Department</th>
                 <th className="py-2 pr-4">Status</th>
                 <th className="py-2"></th>
               </tr>
@@ -149,22 +151,27 @@ export function UserManagement() {
                 <tr key={u.id} className="border-b border-gray-100">
                   <td className="py-2 pr-4 font-medium">{u.full_name}</td>
                   <td className="py-2 pr-4 text-gray-600">{u.email}</td>
-                  <td className="py-2 pr-4">{u.role}</td>
-                  <td className="py-2 pr-4 text-gray-600">{u.department_id || u.teacher_id || u.section_id || '—'}</td>
+                  <td className="py-2 pr-4">{ROLE_LABELS[u.role] ?? u.role}</td>
+                  <td className="py-2 pr-4 text-gray-600">
+                    {u.role === 'SUPERADMIN' ? 'All departments' : departmentName(u.department_id)}
+                    {u.teacher_id && <span className="text-gray-400"> · {u.teacher_id}</span>}
+                  </td>
                   <td className="py-2 pr-4">
                     <span className={u.is_active ? 'text-green-700' : 'text-gray-400'}>
                       {u.is_active ? 'Active' : 'Deactivated'}
                     </span>
                   </td>
                   <td className="py-2">
-                    <button
-                      onClick={() => toggleActive(u)}
-                      className="flex items-center gap-1 text-xs text-gray-600 hover:text-gray-900"
-                      title={u.is_active ? 'Revoke access' : 'Restore access'}
-                    >
-                      {u.is_active ? <ShieldOff size={14} /> : <ShieldCheck size={14} />}
-                      {u.is_active ? 'Deactivate' : 'Reactivate'}
-                    </button>
+                    {grantable.includes(u.role) && u.id !== user?.id && (
+                      <button
+                        onClick={() => toggleActive(u)}
+                        className="flex items-center gap-1 text-xs text-gray-600 hover:text-gray-900"
+                        title={u.is_active ? 'Revoke access' : 'Restore access'}
+                      >
+                        {u.is_active ? <ShieldOff size={14} /> : <ShieldCheck size={14} />}
+                        {u.is_active ? 'Deactivate' : 'Reactivate'}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

@@ -1,38 +1,57 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { timetableApi } from '../api/client';
-import { AgentProposedAction } from '../types';
-import { Sparkles, Send, AlertCircle, Trash2, RefreshCw } from 'lucide-react';
+import { AgentProposedAction, EditConflict, EditOperation } from '../types';
+import { Sparkles, Send, AlertCircle, Trash2, RefreshCw, Check } from 'lucide-react';
+import { ApplyOutcome } from '../hooks/useTimetableEditor';
 
 interface Props {
   runId: number;
+  /**
+   * Applies placement operations (move/swap/teacher/room/delete/lock) through
+   * the conflict-gated manual editor - on a published timetable the viewer
+   * opens a draft first. Resolves with the gate's verdict.
+   */
+  onApplyOps: (ops: EditOperation[], reason: string) => Promise<ApplyOutcome>;
 }
 
+const isEditorOp = (a: AgentProposedAction) => a.action_type === 'editor_op';
+
 /**
- * Whole-timetable AI editing - "remove Cloud Computing", "give DBMS one
- * more class a week for Section B" - as opposed to EditEntryModal's AI
- * move-box, which only helps place ONE already-selected class.
+ * Whole-timetable AI editing. Two kinds of proposals come back:
  *
- * Same plan/apply split as AIAssistantPanel: the model can only ever
- * PROPOSE changes (POST .../ai-plan). Nothing is written until the admin
- * reviews the plan and clicks Apply, which forks a new run with those
- * changes and re-runs the actual solver on it (POST .../ai-apply) - a real
- * feasibility check, not a heuristic patch. See
- * app/services/timetable_ai_agent.py's module docstring on the backend.
+ *  - PLACEMENT changes ("move DBMS to Thursday", "swap these two", "give it to
+ *    Dr. Rao"): editor operations. The backend already pre-checked each one
+ *    against the same conflict gate the manual editor uses, and applying goes
+ *    through that gate again - instant, undoable, never a re-solve.
+ *  - HOURS changes ("remove Cloud Computing", "one more class a week"):
+ *    subject overrides that fork a new run and re-solve it through the real
+ *    solver (POST .../ai-apply), so they are feasibility-checked like any
+ *    other generation.
+ *
+ * The model only ever PROPOSES; nothing is written until the admin reviews
+ * the list and applies it.
  */
-export function TimetableAIAssistant({ runId }: Props) {
+export function TimetableAIAssistant({ runId, onApplyOps }: Props) {
   const navigate = useNavigate();
   const [instruction, setInstruction] = useState('');
   const [loading, setLoading] = useState(false);
-  const [applying, setApplying] = useState(false);
+  const [applying, setApplying] = useState<'ops' | 'regen' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [conflicts, setConflicts] = useState<EditConflict[]>([]);
+  const [done, setDone] = useState<string | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
   const [actions, setActions] = useState<AgentProposedAction[]>([]);
+
+  const placement = actions.filter(isEditorOp);
+  const regen = actions.filter((a) => !isEditorOp(a));
 
   const runPlan = async () => {
     if (!instruction.trim()) return;
     setLoading(true);
     setError(null);
+    setConflicts([]);
+    setDone(null);
     setSummary(null);
     setActions([]);
     try {
@@ -46,16 +65,33 @@ export function TimetableAIAssistant({ runId }: Props) {
     }
   };
 
-  const removeAction = (index: number) => {
-    setActions(actions.filter((_, i) => i !== index));
+  const removeAction = (action: AgentProposedAction) => setActions(actions.filter((a) => a !== action));
+
+  const applyPlacement = async () => {
+    setApplying('ops');
+    setError(null);
+    setConflicts([]);
+    const out = await onApplyOps(
+      placement.map((a) => a.payload as EditOperation),
+      `AI assistant: ${placement.map((a) => a.description).join('; ')}`,
+    );
+    setApplying(null);
+    if (out.ok) {
+      setDone(`${placement.length} change${placement.length === 1 ? '' : 's'} applied. Use Undo to reverse them.`);
+      setActions(regen);
+    } else if (out.violations.length) {
+      setConflicts(out.violations);
+    } else {
+      setError(out.error || 'Failed to apply the changes.');
+    }
   };
 
-  const applyActions = async () => {
-    if (actions.length === 0) return;
-    setApplying(true);
+  const applyRegenerate = async () => {
+    if (regen.length === 0) return;
+    setApplying('regen');
     setError(null);
     try {
-      const response = await timetableApi.aiApply(runId, actions);
+      const response = await timetableApi.aiApply(runId, regen);
       const newRun = response.data;
 
       // Same poll-until-done pattern as GenerateButton - this forks a new
@@ -69,17 +105,17 @@ export function TimetableAIAssistant({ runId }: Props) {
             navigate(`/runs/${newRun.id}`);
           } else if (updated.data.status === 'failed') {
             clearInterval(pollInterval);
-            setApplying(false);
+            setApplying(null);
             setError(updated.data.llm_explanation || 'Regenerating the timetable with these changes failed.');
           }
         } catch {
           clearInterval(pollInterval);
-          setApplying(false);
-          setError('Failed to check the new version\'s status.');
+          setApplying(null);
+          setError("Failed to check the new version's status.");
         }
       }, 2000);
     } catch (err: any) {
-      setApplying(false);
+      setApplying(null);
       setError(err.response?.data?.detail || 'Failed to apply the changes.');
     }
   };
@@ -91,12 +127,11 @@ export function TimetableAIAssistant({ runId }: Props) {
         AI Timetable Assistant
       </h3>
       <p className="mt-1 text-sm text-purple-800">
-        Tell it what to change about this whole timetable in plain English - e.g. "Remove Cloud
-        Computing" or "Give Data Structures one more class a week". It proposes changes for you to
-        review; applying them regenerates the timetable as a new version through the real solver, so
-        it's checked for feasibility like any other run. These changes only affect this timetable -
-        they never change a subject's actual configured hours. It can't move an already-placed class
-        to a new time - use "Move Class" on that class for that.
+        Prefer typing to clicking? Say what you want - "Move Data Structures for Section A to Thursday afternoon",
+        "Swap these two classes", "Give DBMS to Dr. Rao", "Remove Cloud Computing", "One more Maths class a week".
+        It only proposes; you review, then apply. Placement changes are checked against every rule and applied
+        instantly (with Undo). Hours changes regenerate the timetable as a new version through the solver.
+        Everything the assistant can do you can also do by hand with "Edit timetable".
       </p>
 
       <div className="mt-3 flex gap-2">
@@ -121,6 +156,17 @@ export function TimetableAIAssistant({ runId }: Props) {
           {error}
         </div>
       )}
+      {conflicts.length > 0 && (
+        <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          <p className="font-medium">These changes would create conflicts, so none were applied:</p>
+          <ul className="mt-1 list-disc pl-5">{conflicts.map((c, i) => <li key={i}>{c.message}</li>)}</ul>
+        </div>
+      )}
+      {done && (
+        <div className="mt-3 flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+          <Check size={16} /> {done}
+        </div>
+      )}
 
       {summary && (
         <div className="mt-4 rounded-lg border border-purple-200 bg-white p-3">
@@ -128,26 +174,29 @@ export function TimetableAIAssistant({ runId }: Props) {
         </div>
       )}
 
-      {actions.length > 0 && (
-        <div className="mt-3 space-y-2">
-          <p className="text-sm font-medium text-purple-900">Proposed changes - review before applying:</p>
-          {actions.map((action, index) => (
+      {[
+        { title: 'Placement changes - applied instantly, undoable', items: placement, apply: applyPlacement, key: 'ops' as const, label: `Apply ${placement.length} placement change${placement.length === 1 ? '' : 's'}` },
+        { title: 'Hours changes - regenerate the timetable as a new version', items: regen, apply: applyRegenerate, key: 'regen' as const, label: `Apply ${regen.length} change${regen.length === 1 ? '' : 's'} and regenerate` },
+      ].filter((group) => group.items.length > 0).map((group) => (
+        <div key={group.key} className="mt-3 space-y-2">
+          <p className="text-sm font-medium text-purple-900">{group.title} - review before applying:</p>
+          {group.items.map((action, index) => (
             <div key={index} className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
               <span className="text-gray-800">{action.description}</span>
-              <button onClick={() => removeAction(index)} className="p-1 text-red-500 hover:bg-red-50 rounded" title="Remove this change">
+              <button onClick={() => removeAction(action)} className="p-1 text-red-500 hover:bg-red-50 rounded" title="Remove this change">
                 <Trash2 size={16} />
               </button>
             </div>
           ))}
           <button
-            onClick={applyActions} disabled={applying}
+            onClick={group.apply} disabled={applying !== null}
             className="mt-2 flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
           >
-            {applying && <RefreshCw size={16} className="animate-spin" />}
-            {applying ? 'Regenerating timetable...' : `Apply ${actions.length} change${actions.length === 1 ? '' : 's'} and regenerate`}
+            {applying === group.key && <RefreshCw size={16} className="animate-spin" />}
+            {applying === group.key ? (group.key === 'regen' ? 'Regenerating timetable...' : 'Applying...') : group.label}
           </button>
         </div>
-      )}
+      ))}
     </div>
   );
 }

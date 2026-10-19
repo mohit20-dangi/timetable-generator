@@ -1,0 +1,646 @@
+{
+ "cells": [
+  {
+   "section": "III-A",
+   "day": "Tue",
+   "start": "10:00",
+   "end": "11:00",
+   "subject": "CO34_IS",
+   "teachers": [
+    "RV"
+   ],
+   "room": "Tut. Room",
+   "batches": []
+  },
+  {
+   "section": "III-A",
+   "day": "Mon",
+   "start": "11:00",
+   "end": "12:00",
+   "subject": "CO34_OS",
+   "teachers": [
+    "KAM"
+   ],
+   "room": "Tut. Room",
+   "batches": []
+  },
+  {
+   "section": "III-A",
+   "day": "Mon",
+   "start": "12:00",
+   "end": "13:00",
+   "subject": "CO34_CN",
+   "teachers": [
+    "RKD"
+   ],
+   "room": "Tut. Room",
+   "batches": []
+  },
+  {
+   "section": "III-A",
+   "day": "Tue",
+   "start": "11:00",
+   "end": "12:00",
+   "subject": "CO34_TOC",
+   "teachers": [
+    "AP"
+   ],
+   "room": "Tut. Room",
+   "batches": []
+  },
+  {
+   "section": "III-A",
+   "day": "Tue",
+   "start": "12:00",
+   "end": "13:00",
+   "subject": "HUM3401",
+   "teachers": [],
+   "room": "Tut. Room",
+   "batches": []
+  },
+  {
+   "section": "III-A",
+   "day": "Wed",
+   "start": "11:00",
+   "end": "12:00",
+   "subject": "CO34_TOC",
+   "teachers": [
+    "AP"
+   ],
+   "room": "Tut. Room",
+   "batches": []
+  },
+  {
+   "section": "III-A",
+   "day": "Wed",
+   "start": "12:00",
+   "end": "13:00",
+   "subject": "CO34_IS",
+   "teachers": [
+    "RV"
+   ],
+   "room": "Tut. Room",
+   "batches": []
+  },
+  {
+   "section": "III-A",
+   "day": "Thu",
+   "start": "10:00",
+   "end": "11:00",
+   "subject": "CO34_CN",
+   "teachers": [
+    "RKD"
+   ],
+   "room": "LT102",
+   "batches": []
+  },
+  {
+   "section": "III-A",
+   "day": "Thu",
+   "start": "11:00",
+   "end": "12:00",
+   "subject": "CO34_OS",
+   "teachers": [
+    "KAM"
+   ],
+   "room": "LT102",
+   "batches": []
+  },
+  {
+   "section": "III-A",
+   "day": "Thu",
+   "start": "12:00",
+   "end": "13:00",
+   "subject": "CO34_IS",
+   "teachers": [
+    "RV"
+   ],
+   "room": "LT102",
+   "batches": []
+  },
+  {
+   "section": "III-A",
+   "day": "Fri",
+   "start": "10:00",
+   "end": "12:00",
+   "subject": "CO34_TOC",
+   "teachers": [
+    "AP"
+   ],
+   "room": "LT102",
+   "batches": []
+  },
+  {
+   "section": "III-A",
+   "day": "Fri",
+   "start": "12:00",
+   "end": "13:00",
+   "subject": "CO34_OS",
+   "teachers": [
+    "KAM"
+   ],
+   "room": "LT102",
+   "batches": []
+  },
+  {
+   "section": "III-A",
+   "day": "Mon",
+   "start": "14:00",
+   "end": "16:00",
+   "subject": "CO34_CN",
+   "teachers": [
+    "RKD",
+    "AS",
+    "ANS",
+    "PM"
+   ],
+   "room": "GCL",
+   "batches": [
+    "A1",
+    "A2"
+   ]
+  },
+  {
+   "section": "III-A",
+   "day": "Mon",
+   "start": "14:00",
+   "end": "16:00",
+   "subject": "CO34_OS",
+   "teachers": [
+    "KAM",
+    "CHT",
+    "SR",
+    "NS"
+   ],
+   "room": "CNDC",
+   "batches": [
+    "A3"
+   ]
+  },
+  {
+   "section": "III-A",
+   "day": "Tue",
+   "start": "14:00",
+   "end": "16:00",
+   "subject": "CO34_CN",
+   "teachers": [
+    "RKD",
+    "RV",
+    "ANS",
+    "PM"
+   ],
+   "room": "CNDC",
+   "batches": [
+    "A3"
+   ]
+  },
+  {
+   "section": "III-A",
+   "day": "Tue",
+   "start": "14:00",
+   "end": "16:00",
+   "subject": "CO34_OS",
+   "teachers": [
+    "DAM",
+    "KAM",
+    "CHT",
+    "SR",
+    "NS"
+   ],
+   "room": "GCL",
+   "batches": [
+    "A1",
+    "A2"
+   ]
+  },
+  {
+   "section": "III-A",
+   "day": "Wed",
+   "start": "14:00",
+   "end": "15:00",
+   "subject": "CO34_OS",
+   "teachers": [
+    "KAM"
+   ],
+   "room": "Tut. Room",
+   "batches": []
+  },
+  {
+   "section": "III-A",
+   "day": "Wed",
+   "start": "15:00",
+   "end": "16:00",
+   "subject": "HUM3401",
+   "teachers": [],
+   "room": "Tut. Room",
+   "batches": []
+  },
+  {
+   "section": "III-A",
+   "day": "Thu",
+   "start": "14:00",
+   "end": "16:00",
+   "subject": "CO34_INTER",
+   "teachers": [
+    "RKD",
+    "CHN"
+   ],
+   "room": "Iot Lab",
+   "batches": []
+  },
+  {
+   "section": "III-A",
+   "day": "Wed",
+   "start": "16:00",
+   "end": "18:00",
+   "subject": "CO34_MINI",
+   "teachers": [
+    "DAM",
+    "NM",
+    "AS"
+   ],
+   "room": "AVLC",
+   "batches": [
+    "A1"
+   ]
+  },
+  {
+   "section": "III-A",
+   "day": "Wed",
+   "start": "16:00",
+   "end": "18:00",
+   "subject": "CO34_MINI",
+   "teachers": [
+    "AP",
+    "CHN",
+    "KAM"
+   ],
+   "room": "DS",
+   "batches": [
+    "A2"
+   ]
+  },
+  {
+   "section": "III-A",
+   "day": "Wed",
+   "start": "16:00",
+   "end": "18:00",
+   "subject": "CO34_MINI",
+   "teachers": [
+    "RKD",
+    "RV"
+   ],
+   "room": "IoT Lab",
+   "batches": [
+    "A3"
+   ]
+  },
+  {
+   "section": "III-B",
+   "day": "Mon",
+   "start": "11:00",
+   "end": "12:00",
+   "subject": "CO34_ML",
+   "teachers": [
+    "HM"
+   ],
+   "room": "LT102",
+   "batches": []
+  },
+  {
+   "section": "III-B",
+   "day": "Mon",
+   "start": "12:00",
+   "end": "13:00",
+   "subject": "CO34_DAA",
+   "teachers": [
+    "TD"
+   ],
+   "room": "LT102",
+   "batches": []
+  },
+  {
+   "section": "III-B",
+   "day": "Tue",
+   "start": "11:00",
+   "end": "12:00",
+   "subject": "CO34_DAA",
+   "teachers": [
+    "TD"
+   ],
+   "room": "LT102",
+   "batches": []
+  },
+  {
+   "section": "III-B",
+   "day": "Tue",
+   "start": "12:00",
+   "end": "13:00",
+   "subject": "CO34_ML",
+   "teachers": [
+    "HM"
+   ],
+   "room": "LT102",
+   "batches": []
+  },
+  {
+   "section": "III-B",
+   "day": "Wed",
+   "start": "11:00",
+   "end": "13:00",
+   "subject": "CO34_DBMS",
+   "teachers": [
+    "VT"
+   ],
+   "room": "LT102",
+   "batches": []
+  },
+  {
+   "section": "III-B",
+   "day": "Thu",
+   "start": "11:00",
+   "end": "13:00",
+   "subject": "CO34_DBMS",
+   "teachers": [
+    "VT"
+   ],
+   "room": "Tut. Room",
+   "batches": []
+  },
+  {
+   "section": "III-B",
+   "day": "Fri",
+   "start": "10:00",
+   "end": "11:00",
+   "subject": "CO34_ML",
+   "teachers": [
+    "HM"
+   ],
+   "room": "Tut. Room",
+   "batches": []
+  },
+  {
+   "section": "III-B",
+   "day": "Fri",
+   "start": "11:00",
+   "end": "12:00",
+   "subject": "CO34_DAA",
+   "teachers": [
+    "TD"
+   ],
+   "room": "Tut. Room",
+   "batches": []
+  },
+  {
+   "section": "III-B",
+   "day": "Fri",
+   "start": "12:00",
+   "end": "13:00",
+   "subject": "CO34_IOT",
+   "teachers": [
+    "RV"
+   ],
+   "room": "Tut. Room",
+   "batches": []
+  },
+  {
+   "section": "III-B",
+   "day": "Mon",
+   "start": "14:00",
+   "end": "16:00",
+   "subject": "CO34_DAA",
+   "teachers": [
+    "SG",
+    "TD",
+    "RIJ",
+    "AB"
+   ],
+   "room": "AI Lab",
+   "batches": [
+    "B1"
+   ]
+  },
+  {
+   "section": "III-B",
+   "day": "Mon",
+   "start": "14:00",
+   "end": "16:00",
+   "subject": "CO_IoT",
+   "teachers": [
+    "RV",
+    "RP",
+    "ANS",
+    "SM"
+   ],
+   "room": "IOT Lab",
+   "batches": [
+    "B2"
+   ]
+  },
+  {
+   "section": "III-B",
+   "day": "Mon",
+   "start": "14:00",
+   "end": "16:00",
+   "subject": "CO34_ML",
+   "teachers": [
+    "HM",
+    "MCH",
+    "PS",
+    "AOS"
+   ],
+   "room": "PG",
+   "batches": [
+    "B3"
+   ]
+  },
+  {
+   "section": "III-B",
+   "day": "Tue",
+   "start": "14:00",
+   "end": "16:00",
+   "subject": "CO34_DAA",
+   "teachers": [
+    "TD",
+    "KM",
+    "AB",
+    "RIJ"
+   ],
+   "room": "AI Lab",
+   "batches": [
+    "B3"
+   ]
+  },
+  {
+   "section": "III-B",
+   "day": "Wed",
+   "start": "14:00",
+   "end": "16:00",
+   "subject": "CO_IoT",
+   "teachers": [
+    "RV",
+    "RP",
+    "LT",
+    "SM"
+   ],
+   "room": "IoT Lab",
+   "batches": [
+    "B3"
+   ]
+  },
+  {
+   "section": "III-B",
+   "day": "Wed",
+   "start": "14:00",
+   "end": "16:00",
+   "subject": "CO34_ML",
+   "teachers": [
+    "HM",
+    "TD",
+    "MCH",
+    "NS",
+    "AOS"
+   ],
+   "room": "GCL",
+   "batches": [
+    "B1",
+    "B2"
+   ]
+  },
+  {
+   "section": "III-B",
+   "day": "Thu",
+   "start": "14:00",
+   "end": "16:00",
+   "subject": "CO_IoT",
+   "teachers": [
+    "RV",
+    "RP",
+    "LT",
+    "SM"
+   ],
+   "room": "IOT LAB",
+   "batches": [
+    "B1"
+   ]
+  },
+  {
+   "section": "III-B",
+   "day": "Thu",
+   "start": "14:00",
+   "end": "16:00",
+   "subject": "CO34_DAA",
+   "teachers": [
+    "TD",
+    "CHT",
+    "RIJ",
+    "AB"
+   ],
+   "room": "AI Lab",
+   "batches": [
+    "B2"
+   ]
+  },
+  {
+   "section": "III-B",
+   "day": "Mon",
+   "start": "16:00",
+   "end": "18:00",
+   "subject": "CO34_DBMS",
+   "teachers": [
+    "VT",
+    "CHN",
+    "ASP",
+    "NS",
+    "CS"
+   ],
+   "room": "GCL",
+   "batches": [
+    "B1",
+    "B2"
+   ]
+  },
+  {
+   "section": "III-B",
+   "day": "Tue",
+   "start": "16:00",
+   "end": "18:00",
+   "subject": "CO34_DBMS",
+   "teachers": [
+    "VT",
+    "ASP",
+    "CHN",
+    "NS",
+    "CS"
+   ],
+   "room": "GCL",
+   "batches": [
+    "B3"
+   ]
+  },
+  {
+   "section": "III-B",
+   "day": "Wed",
+   "start": "16:00",
+   "end": "18:00",
+   "subject": "CO34_MINI",
+   "teachers": [
+    "UT",
+    "ASP"
+   ],
+   "room": "CNDC",
+   "batches": [
+    "B1"
+   ]
+  },
+  {
+   "section": "III-B",
+   "day": "Wed",
+   "start": "16:00",
+   "end": "18:00",
+   "subject": "CO34_MINI",
+   "teachers": [
+    "VT",
+    "HM"
+   ],
+   "room": "Cluster Comp., 213",
+   "batches": [
+    "B2"
+   ]
+  },
+  {
+   "section": "III-B",
+   "day": "Wed",
+   "start": "16:00",
+   "end": "18:00",
+   "subject": "CO34_MINI",
+   "teachers": [
+    "SG",
+    "RP"
+   ],
+   "room": "AI LAB",
+   "batches": [
+    "B3"
+   ]
+  }
+ ],
+ "legend": {
+  "A": {
+   "DAM": "Dr. D. A. Mehta",
+   "UT": "Dr. Urjita Thakar",
+   "AP": "Dr. Anuradha Purohit",
+   "RKD": "Shri Rajesh Dhakad",
+   "RP": "Ms. Ritambhara Patidar",
+   "AS": "Ms. Ashwini Sharma",
+   "CHN": "Ms. Chetali Neema",
+   "RV": "Mr. Ranjeet Vishvakarma",
+   "CHT": "Mr. Chandresh Tatawat",
+   "KAM": "Ms. Karishma",
+   "NS": "Mr. Naresh Shrivastava",
+   "SM": "Mr. Sumit Manoria",
+   "PM": "Prince Mangoliya",
+   "ANS": "Anshul Satle",
+   "SR": "Shrishti Rathore"
+  }
+ }
+}

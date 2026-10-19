@@ -1,8 +1,18 @@
 import { useState } from 'react';
 import { AlertCircle, CheckCircle, Download, FileSpreadsheet, Upload } from 'lucide-react';
 import { bulkImportApi } from '../api/client';
+import { useDepartment } from '../context/DepartmentContext';
 
-type ImportResult = {
+// "college_load" = the department's own teaching-load workbook, converted
+// server-side; `warnings` are the assumptions the conversion made.
+type SourceInfo = {
+  format: 'template' | 'college_load';
+  source_sheet?: string;
+  department_name?: string;
+  warnings: string[];
+};
+
+type ImportResult = SourceInfo & {
   message: string;
   sheets: Record<string, number>;
   created: number;
@@ -10,27 +20,47 @@ type ImportResult = {
   relations_created: number;
 };
 
-type PreviewResult = {
+type PreviewResult = SourceInfo & {
   message: string;
   sheets: Record<string, number>;
   total_rows: number;
   linked_updates: number;
 };
 
+function SourceNotes({ source }: { source: SourceInfo }) {
+  if (source.format !== 'college_load') return null;
+  return (
+    <div className="mt-2">
+      <p>
+        Read as a department load workbook, using the allotment sheet <strong>{source.source_sheet}</strong>,
+        into department <strong>{source.department_name}</strong>.
+      </p>
+      {source.warnings.length > 0 && (
+        <ul className="mt-1 list-disc pl-5 space-y-0.5">
+          {source.warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function BulkExcelImport() {
+  const { departmentId } = useDepartment();
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [error, setError] = useState('');
 
-  const handleDownloadTemplate = async () => {
+  const download = async (fetchFile: () => Promise<{ data: Blob }>, filename: string) => {
     try {
-      const response = await bulkImportApi.downloadTemplate();
+      const response = await fetchFile();
       const url = URL.createObjectURL(response.data);
       const link = document.createElement('a');
       link.href = url;
-      link.download = 'timetable-import-template.xlsx';
+      link.download = filename;
       link.click();
       URL.revokeObjectURL(url);
     } catch {
@@ -49,7 +79,7 @@ export function BulkExcelImport() {
     setResult(null);
     setPreview(null);
     try {
-      const response = await bulkImportApi.previewExcel(file);
+      const response = await bulkImportApi.previewExcel(file, departmentId);
       setPreview(response.data);
     } catch (uploadError: any) {
       const detail = uploadError?.response?.data?.detail;
@@ -64,7 +94,7 @@ export function BulkExcelImport() {
     setIsUploading(true);
     setError('');
     try {
-      const response = await bulkImportApi.uploadExcel(file);
+      const response = await bulkImportApi.uploadExcel(file, departmentId);
       setResult(response.data);
       setPreview(null);
     } catch (uploadError: any) {
@@ -84,33 +114,49 @@ export function BulkExcelImport() {
         <div>
           <h3 className="text-lg font-semibold text-gray-900">Load setup from Excel</h3>
           <p className="text-sm text-gray-600 mt-1">
-            Import your timetable data in one workbook. Existing records with the same IDs are updated;
-            missing records are created.
+            Upload the department's teaching-load workbook as it is. Existing records are updated and missing
+            ones created, in the department you're working in.
           </p>
         </div>
       </div>
 
       <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 mb-6 text-sm text-blue-900">
-        <p>
-          Supported sheets: AcademicYears, Sections, Subjects, Teachers, Rooms, SectionSubjects,
-          TeacherSubjects, LabBatches, Prerequisites, and TimeSlots. You can upload only the sheets you need.
+        <p className="font-medium">The workbook has six sheets</p>
+        <ol className="mt-1 list-decimal pl-5 space-y-0.5">
+          <li><strong>Faculty List</strong> - each teacher's name and initials.</li>
+          <li><strong>Subject Choice</strong> - what each teacher can teach. Used for subjects nobody is allocated to.</li>
+          <li>
+            <strong>Load Calculation</strong> - every class's subjects with theory, tutorial and practical periods,
+            batches and faculty per session.
+          </li>
+          <li>
+            <strong>Faculty wise subject allocation</strong> - the final list. A teacher listed here teaches exactly
+            those subjects; a secondary column lists teachers who only assist.
+          </li>
+          <li><strong>First Year Load</strong> - hours a teacher gives to first year; taken off their weekly hours.</li>
+          <li>
+            <strong>Elective</strong> - the options of each elective. An NPTEL option needs no teacher: it gets
+            self-study periods in the first or last period of the day.
+          </li>
+        </ol>
+        <p className="mt-2">
+          The department's own load file (with <strong>Subject_facult_&lt;date&gt;</strong> sheets) is accepted as it is
+          too; its newest revision is used.
         </p>
         <p className="mt-2">
-          Fields with several values (a teacher's free periods, a room's equipment, an elective group's
-          subjects, ...) are their own linking sheet - one plain row per value, referencing the parent by id
-          (e.g. TeacherAvailability, RoomEquipment, AcademicYearLunchWindows, ElectiveGroupSubjects).
-          No JSON, just table columns like in every other sheet.
+          Rooms, the bell schedule and term dates aren't in this file - set them up separately. Re-uploading a
+          newer revision updates the allotments to match it; nothing you added by hand is deleted.
         </p>
       </div>
 
       <div className="flex flex-wrap gap-3 mb-6">
         <button
           type="button"
-          onClick={handleDownloadTemplate}
+          onClick={() => download(bulkImportApi.downloadCollegeTemplate, 'department-load-template.xlsx')}
           className="flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
         >
           <Download size={18} />
-          Download Excel template
+          Download department load template
         </button>
       </div>
 
@@ -139,11 +185,33 @@ export function BulkExcelImport() {
         </button>
       </form>
 
+      <details className="mt-4 rounded-lg border border-gray-200 p-4 text-sm text-gray-700">
+        <summary className="cursor-pointer font-medium text-gray-800">
+          Advanced: the app's own template (one sheet per table)
+        </summary>
+        <p className="mt-2">
+          The same upload box also accepts a workbook with one sheet per table - AcademicYears, Sections, Subjects,
+          Teachers, Rooms, SectionSubjects, TeacherSubjects, LabBatches, Prerequisites and TimeSlots. You can include
+          only the sheets you need. Fields with several values (a teacher's free periods, a room's equipment, an
+          elective group's subjects, ...) are their own linking sheet, one plain row per value, referencing the
+          parent by id (TeacherAvailability, RoomEquipment, AcademicYearLunchWindows, ElectiveGroupSubjects).
+        </p>
+        <button
+          type="button"
+          onClick={() => download(bulkImportApi.downloadTemplate, 'timetable-import-template.xlsx')}
+          className="mt-3 flex items-center gap-2 px-3 py-1.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+        >
+          <Download size={16} />
+          Download the app template
+        </button>
+      </details>
+
       {preview && (
         <div className="mt-4 rounded-lg bg-amber-50 border border-amber-200 p-4 text-sm text-amber-900">
           <p className="font-medium">{preview.message}</p>
           <p className="mt-1">{preview.total_rows} row(s) are ready across {Object.keys(preview.sheets).length} sheet(s).</p>
           <p className="mt-1">Rows: {Object.entries(preview.sheets).map(([name, count]) => `${name} (${count})`).join(', ')}.</p>
+          <SourceNotes source={preview} />
           {preview.linked_updates > 0 && (
             <p className="mt-1">
               Plus {preview.linked_updates} linking-sheet update(s) to existing records not otherwise in this workbook.
@@ -177,6 +245,7 @@ export function BulkExcelImport() {
           <p className="mt-1 text-green-800">
             Rows read: {Object.entries(result.sheets).map(([name, count]) => `${name} (${count})`).join(', ')}.
           </p>
+          <SourceNotes source={result} />
         </div>
       )}
     </div>

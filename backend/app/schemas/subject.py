@@ -33,6 +33,11 @@ class SubjectBase(BaseModel):
     # (hard, same start+room+teacher - taught as one combined class). See
     # Subject.batch_scheduling_mode's docstring.
     batch_scheduling_mode: str = "independent"
+    # How many qualified teachers one session needs AT ONCE - 2+ for a lab
+    # that genuinely needs a second supervisor on the floor. See
+    # Subject.teachers_required.
+    teachers_required: int = 1
+    self_study_hours: int = 0
 
     max_per_day: int = 1
     requires_room_type: Optional[str] = None
@@ -48,6 +53,8 @@ class SubjectBase(BaseModel):
             raise ValueError(f"batch_scheduling_mode must be one of {sorted(VALID_BATCH_SCHEDULING_MODES)}")
         if self.periods_per_session < 1:
             raise ValueError("periods_per_session must be at least 1")
+        if self.teachers_required < 1:
+            raise ValueError("teachers_required must be at least 1")
         if self.max_per_day < 1:
             raise ValueError("max_per_day must be at least 1")
 

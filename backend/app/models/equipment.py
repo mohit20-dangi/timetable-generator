@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String
+from sqlalchemy import Column, String, ForeignKey
 from app.db import Base
 
 
@@ -11,3 +11,6 @@ class Equipment(Base):
 
     id = Column(String, primary_key=True, index=True)
     name = Column(String, nullable=False)
+    # Each department keeps its own catalog; NULL = from before departments
+    # were separated, visible to every department.
+    department_id = Column(String, ForeignKey("departments.id"), nullable=True)

@@ -2,14 +2,19 @@ import { useState, useEffect } from 'react';
 import { constraintsApi } from '../api/client';
 import { ConstraintProfile, ImportanceLevel } from '../types';
 import { useDepartment } from '../context/DepartmentContext';
-import { Plus, Save, X, Send, AlertCircle, CheckCircle, Sparkles } from 'lucide-react';
-import { AIAssistantPanel } from './AIAssistantPanel';
+import { Plus, Save, X } from 'lucide-react';
 
 // Every key here must be one the backend's model_builder actually reads
 // (see app/solver/weights.py::SOFT_RULE_KEYS on the backend, kept in
 // lockstep by a test) - there is no numeric weight anywhere in this UI.
 // An admin picks how important a plain-English rule is, not a number.
-const RULE_DEFINITIONS: { key: string; label: string; description: string }[] = [
+// A rule with a `param` shows a number box inside its sentence
+// ("Avoid more than [2] lectures in a row...") - the admin fills the blank.
+// `label` stays the full sentence (with "N") for the profile summary table.
+interface RuleParam { key: string; default: number; before: string; after: string }
+interface RuleDefinition { key: string; label: string; description: string; param?: RuleParam }
+
+const RULE_DEFINITIONS: RuleDefinition[] = [
   {
     key: 'minimize_student_gaps',
     label: "Don't leave free periods in the middle of a student's day",
@@ -40,7 +45,54 @@ const RULE_DEFINITIONS: { key: string; label: string; description: string }[] = 
     label: 'Share teaching load fairly across faculty',
     description: "Don't let one teacher's week be much fuller than another's.",
   },
+  {
+    key: 'limit_consecutive_teaching',
+    label: 'Limit back-to-back teaching for a teacher',
+    description: "Gives teachers a breather between lectures. A teacher's own hard limit in their profile still applies.",
+    param: { key: 'max_consecutive_teaching', default: 2, before: 'Avoid more than', after: 'lectures in a row for one teacher' },
+  },
+  {
+    key: 'cap_teacher_daily_periods',
+    label: "Cap a teacher's periods per day",
+    description: "Don't pack one teacher's load into a single day.",
+    param: { key: 'max_teacher_periods_per_day', default: 4, before: 'Try to keep a teacher to at most', after: 'periods in a day' },
+  },
+  {
+    key: 'teacher_lighter_day',
+    label: 'Give teachers a lighter day',
+    description: 'Try to leave each teacher one day with few or no classes (at most 2 periods).',
+  },
+  {
+    key: 'no_repeat_subject_same_day',
+    label: "Don't repeat a subject on the same day",
+    description: 'Labs and double periods are exceptions.',
+  },
+  {
+    key: 'spread_subject_across_week',
+    label: 'Spread each subject across the week',
+    description: 'For example Mon/Wed/Fri rather than three days in a row.',
+  },
+  {
+    key: 'heavy_subjects_early',
+    label: 'Put heavy subjects earlier in the day',
+    description: 'Core subjects (3 or more classes a week) go in the morning rather than the afternoon.',
+  },
+  {
+    key: 'balanced_theory_lab_days',
+    label: 'Keep days balanced between theory and labs',
+    description: "Avoid a day of only labs, or only theory when there are enough labs to go around.",
+  },
 ];
+
+function defaultParams(): Record<string, number> {
+  return Object.fromEntries(
+    RULE_DEFINITIONS.filter((r) => r.param).map((r) => [r.param!.key, r.param!.default]),
+  );
+}
+
+function paramsToInputs(values: Record<string, number>): Record<string, string> {
+  return Object.fromEntries(Object.entries(values).map(([k, v]) => [k, String(v)]));
+}
 
 const LEVEL_OPTIONS: { value: ImportanceLevel; label: string; hint: string }[] = [
   { value: 'must_have', label: 'Must have', hint: 'Treated as a hard rule - generation may fail if it truly can\'t be met.' },
@@ -71,12 +123,16 @@ const PRESETS: { id: string; label: string; description: string; levels: Record<
       minimize_student_gaps: 'must_have', balance_load_across_days: 'very_important',
       avoid_edge_periods: 'very_important', parallel_lab_batches: 'very_important',
       teacher_preferred_slots: 'nice_to_have', fair_teacher_workload: 'nice_to_have',
+      no_repeat_subject_same_day: 'very_important', spread_subject_across_week: 'very_important',
+      heavy_subjects_early: 'very_important', balanced_theory_lab_days: 'very_important',
     },
   },
   {
     id: 'teacher_friendly', label: 'Teacher-friendly', description: 'Prioritizes fair, predictable schedules for faculty.',
     levels: {
       teacher_preferred_slots: 'very_important', fair_teacher_workload: 'very_important',
+      limit_consecutive_teaching: 'very_important', cap_teacher_daily_periods: 'very_important',
+      teacher_lighter_day: 'very_important',
       balance_load_across_days: 'nice_to_have', minimize_student_gaps: 'nice_to_have',
       parallel_lab_batches: 'nice_to_have', avoid_edge_periods: 'nice_to_have',
     },
@@ -95,11 +151,11 @@ export function ConstraintBuilder() {
   const [profileId, setProfileId] = useState('');
   const [profileName, setProfileName] = useState('');
   const [levels, setLevels] = useState<Record<string, ImportanceLevel>>(defaultLevels());
-
-  const [nlText, setNlText] = useState('');
-  const [nlResult, setNlResult] = useState<any>(null);
-  const [nlLoading, setNlLoading] = useState(false);
-  const [nlError, setNlError] = useState<string | null>(null);
+  // Kept as strings while typing so the box can be cleared and retyped;
+  // blank/invalid falls back to the default on save.
+  const [params, setParams] = useState<Record<string, string>>(
+    Object.fromEntries(Object.entries(defaultParams()).map(([k, v]) => [k, String(v)])),
+  );
 
   useEffect(() => {
     fetchProfiles();
@@ -118,6 +174,7 @@ export function ConstraintBuilder() {
     setProfileId('');
     setProfileName('');
     setLevels(defaultLevels());
+    setParams(paramsToInputs(defaultParams()));
   };
 
   const applyPreset = (presetId: string) => {
@@ -127,7 +184,13 @@ export function ConstraintBuilder() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const payload = { id: profileId, name: profileName, department_id: departmentId || null, soft_constraint_weights: levels };
+    const rule_params = Object.fromEntries(
+      Object.entries(defaultParams()).map(([key, fallback]) => {
+        const n = parseInt(params[key], 10);
+        return [key, Number.isFinite(n) && n >= 1 ? n : fallback];
+      }),
+    );
+    const payload = { id: profileId, name: profileName, department_id: departmentId || null, soft_constraint_weights: levels, rule_params };
     try {
       if (editingProfile) {
         await constraintsApi.updateProfile(editingProfile.id, payload);
@@ -148,6 +211,7 @@ export function ConstraintBuilder() {
     setProfileId(profile.id);
     setProfileName(profile.name);
     setLevels({ ...defaultLevels(), ...(profile.soft_constraint_weights || {}) });
+    setParams(paramsToInputs({ ...defaultParams(), ...(profile.rule_params || {}) }));
     setShowForm(true);
   };
 
@@ -162,44 +226,8 @@ export function ConstraintBuilder() {
     }
   };
 
-  const handleNLSubmit = async () => {
-    if (!nlText.trim()) return;
-    setNlLoading(true);
-    setNlError(null);
-    setNlResult(null);
-    try {
-      const response = await constraintsApi.parseNL(nlText);
-      setNlResult(response.data.parsed_constraints);
-    } catch (error: any) {
-      setNlError(error.response?.data?.detail || 'Failed to parse constraints. If no AI key is configured, use the form below instead.');
-    } finally {
-      setNlLoading(false);
-    }
-  };
-
-  const handleNLImport = () => {
-    if (!nlResult) return;
-    setProfileId(`profile_${Date.now()}`);
-    setProfileName('Imported from AI');
-    setLevels({ ...defaultLevels(), ...(nlResult.soft_constraint_weights || {}) });
-    setShowForm(true);
-    setNlResult(null);
-    setNlText('');
-  };
-
-  const describeLevel = (weights: Record<string, any>, key: string) => {
-    const level = weights?.[key] as ImportanceLevel | undefined;
-    return LEVEL_OPTIONS.find((l) => l.value === level)?.label || 'Nice to have';
-  };
-
   return (
     <div>
-      {departmentId && (
-        <div className="mb-6">
-          <AIAssistantPanel departmentId={departmentId} />
-        </div>
-      )}
-
       <div className="flex justify-between items-center mb-4">
         <h3 className="text-lg font-semibold">Scheduling priorities</h3>
         <button
@@ -213,78 +241,6 @@ export function ConstraintBuilder() {
           <Plus size={20} />
           Add Profile
         </button>
-      </div>
-
-      {/* AI-assisted natural language parsing */}
-      <div className="mb-6 p-4 border border-gray-200 rounded-lg bg-gray-50">
-        <h4 className="font-medium text-gray-700 mb-2 flex items-center gap-2">
-          <Sparkles size={18} className="text-purple-600" />
-          Describe your priorities in plain English
-        </h4>
-        <p className="text-sm text-gray-600 mb-3">
-          e.g. "Keep student gaps to a minimum, and make sure lab batches always run together."
-        </p>
-        <textarea
-          value={nlText}
-          onChange={(e) => setNlText(e.target.value)}
-          placeholder="Describe your scheduling priorities..."
-          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-y min-h-[80px]"
-        />
-        <div className="flex gap-2 mt-2">
-          <button
-            onClick={handleNLSubmit}
-            disabled={nlLoading || !nlText.trim()}
-            className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors"
-          >
-            {nlLoading ? (
-              <>
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                Thinking...
-              </>
-            ) : (
-              <>
-                <Send size={20} />
-                Parse with AI
-              </>
-            )}
-          </button>
-        </div>
-
-        {nlError && (
-          <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
-            <AlertCircle size={20} className="text-red-600 mt-0.5" />
-            <span className="text-sm text-red-700">{nlError}</span>
-          </div>
-        )}
-
-        {nlResult && (
-          <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg">
-            <div className="flex items-center gap-2 mb-2">
-              <CheckCircle size={20} className="text-green-600" />
-              <span className="font-medium text-green-800">Here's what I understood:</span>
-            </div>
-            <ul className="text-sm text-gray-700 space-y-1 mb-2">
-              {RULE_DEFINITIONS.map((rule) => (
-                <li key={rule.key}>
-                  <span className="font-medium">{rule.label}:</span> {describeLevel(nlResult.soft_constraint_weights || {}, rule.key)}
-                </li>
-              ))}
-            </ul>
-            {(nlResult.ambiguities?.length > 0 || nlResult.unsupported_requests?.length > 0) && (
-              <div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-900">
-                <p className="font-medium">Please double-check before saving</p>
-                {nlResult.ambiguities?.map((item: string) => <p key={item}>Not sure: {item}</p>)}
-                {nlResult.unsupported_requests?.map((item: string) => <p key={item}>Can't do yet: {item}</p>)}
-              </div>
-            )}
-            <button
-              onClick={handleNLImport}
-              className="mt-3 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm"
-            >
-              Use this as a starting point
-            </button>
-          </div>
-        )}
       </div>
 
       {/* Profile Form */}
@@ -334,7 +290,20 @@ export function ConstraintBuilder() {
               <div className="space-y-4">
                 {RULE_DEFINITIONS.map((rule) => (
                   <div key={rule.key} className="border border-gray-200 rounded-lg p-3 bg-white">
-                    <p className="text-sm font-medium text-gray-900">{rule.label}</p>
+                    {rule.param ? (
+                      <p className="text-sm font-medium text-gray-900">
+                        {rule.param.before}{' '}
+                        <input
+                          type="number" min={1} max={12} value={params[rule.param.key] ?? ''}
+                          onChange={(e) => setParams({ ...params, [rule.param!.key]: e.target.value })}
+                          aria-label={`${rule.param.before} ... ${rule.param.after}`}
+                          className="w-14 px-2 py-0.5 mx-1 border border-gray-300 rounded text-center focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        />{' '}
+                        {rule.param.after}
+                      </p>
+                    ) : (
+                      <p className="text-sm font-medium text-gray-900">{rule.label}</p>
+                    )}
                     <p className="text-xs text-gray-500 mb-2">{rule.description}</p>
                     <div className="flex flex-wrap gap-2">
                       {LEVEL_OPTIONS.map((option) => {

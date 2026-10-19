@@ -11,11 +11,14 @@ class SubjectTypeBase(BaseModel):
 
 class SubjectTypeCreate(SubjectTypeBase):
     id: str
+    # Blank = the creating user's own department.
+    department_id: Optional[str] = None
 
 
 class SubjectTypeResponse(SubjectTypeBase):
     id: str
     is_builtin: bool
+    department_id: Optional[str] = None
 
     class Config:
         from_attributes = True

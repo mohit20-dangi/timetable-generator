@@ -1,11 +1,12 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { authApi } from '../api/client';
+import { Role } from '../auth/roles';
 
 export interface CurrentUser {
   id: number;
   email: string;
   full_name: string;
-  role: 'ADMIN' | 'HOD' | 'FACULTY' | 'STUDENT';
+  role: Role;
   department_id: string | null;
   teacher_id: string | null;
   section_id: string | null;

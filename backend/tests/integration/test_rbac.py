@@ -3,7 +3,7 @@ only. A HOD account scoped to one department must be refused (403) on any
 run belonging to another department, and reads/writes of unrelated
 departments must not be reachable through /runs listing either.
 """
-ADMIN = {"email": "admin@test.edu", "password": "TestPassword123!", "full_name": "Admin", "role": "ADMIN"}
+ADMIN = {"email": "admin@test.edu", "password": "TestPassword123!", "full_name": "Admin", "role": "SUPERADMIN"}
 
 
 def _auth_headers(client, email, password):
@@ -13,7 +13,6 @@ def _auth_headers(client, email, password):
 
 
 def _minimal_department(client, headers, dept_id, inst_id="inst1"):
-    client.post("/api/institutions/", json={"id": inst_id, "name": "Test"}, headers=headers)
     client.post("/api/departments/", json={"id": dept_id, "institution_id": inst_id, "name": dept_id}, headers=headers)
     client.post("/api/years/", json={"id": f"y_{dept_id}", "name": "Y1", "department_id": dept_id}, headers=headers)
     client.post("/api/sections/", json={"id": f"sec_{dept_id}", "year_id": f"y_{dept_id}", "name": "A", "strength": 10}, headers=headers)

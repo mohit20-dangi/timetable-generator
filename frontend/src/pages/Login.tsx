@@ -1,5 +1,5 @@
 import { useState, FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 export function Login() {
@@ -62,6 +62,12 @@ export function Login() {
             {loading ? 'Checking session...' : submitting ? 'Signing in...' : 'Sign in'}
           </button>
         </form>
+
+        <p className="text-sm text-center mt-4">
+          <Link to="/timetables" className="text-blue-600 hover:underline">
+            Just here to check a class timetable?
+          </Link>
+        </p>
 
         <p className="text-xs text-gray-400 mt-6">
           No account yet? Ask your department admin to create one for you.

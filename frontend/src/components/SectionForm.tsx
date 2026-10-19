@@ -9,11 +9,13 @@ export function SectionForm() {
   const [sections, setSections] = useState<Section[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingSection, setEditingSection] = useState<Section | null>(null);
+  const [error, setError] = useState('');
   const [formData, setFormData] = useState({
     id: '',
     year_id: '',
     name: '',
-    strength: 60
+    strength: 60,
+    is_repeater: false,
   });
 
   useEffect(() => {
@@ -49,7 +51,7 @@ export function SectionForm() {
       }
       setShowForm(false);
       setEditingSection(null);
-      setFormData({ id: '', year_id: '', name: '', strength: 60 });
+      setFormData({ id: '', year_id: '', name: '', strength: 60, is_repeater: false });
       fetchSections();
     } catch (error) {
       console.error('Failed to save section:', error);
@@ -62,31 +64,34 @@ export function SectionForm() {
       id: section.id,
       year_id: section.year_id,
       name: section.name,
-      strength: section.strength
+      strength: section.strength,
+      is_repeater: !!section.is_repeater,
     });
     setShowForm(true);
   };
 
   const handleDelete = async (id: string) => {
     if (window.confirm('Are you sure you want to delete this section?')) {
+      setError('');
       try {
         await sectionsApi.delete(id);
         fetchSections();
-      } catch (error) {
-        console.error('Failed to delete section:', error);
+      } catch (err: any) {
+        setError(err?.response?.data?.detail || 'Could not delete the section.');
       }
     }
   };
 
   return (
     <div>
+      {error && <p className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">{error}</p>}
       <div className="flex justify-between items-center mb-4">
         <h3 className="text-lg font-semibold">Sections</h3>
         <button
           onClick={() => {
             setShowForm(true);
             setEditingSection(null);
-            setFormData({ id: '', year_id: years[0]?.id || '', name: '', strength: 60 });
+            setFormData({ id: '', year_id: years[0]?.id || '', name: '', strength: 60, is_repeater: false });
           }}
           className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
         >
@@ -144,6 +149,21 @@ export function SectionForm() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
             </div>
+            <label className="md:col-span-2 flex items-start gap-2 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={formData.is_repeater}
+                onChange={(e) => setFormData({ ...formData, is_repeater: e.target.checked })}
+                className="mt-1"
+              />
+              <span>
+                <span className="font-medium">Section of repeating students</span>
+                <span className="block text-xs text-gray-500">
+                  Repeaters sit in other sections' classes. Choose which section each subject is attended
+                  with on the Curriculum page.
+                </span>
+              </span>
+            </label>
             <div className="md:col-span-2 flex gap-2">
               <button
                 type="submit"
@@ -182,6 +202,7 @@ export function SectionForm() {
             render: (s) => years.find((y) => y.id === s.year_id)?.name || s.year_id,
           },
           { key: 'strength', header: 'Strength', render: (s) => String(s.strength) },
+          { key: 'repeater', header: 'Repeaters', render: (s) => (s.is_repeater ? 'Yes' : '') },
         ]}
         actions={(section) => (
           <>

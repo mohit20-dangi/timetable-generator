@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { subjectsApi, subjectTypesApi, equipmentApi, teachersApi } from '../api/client';
 import { Subject, DeliveryMode, BatchSchedulingMode, SubjectType, Equipment, Teacher } from '../types';
 import { useDepartment } from '../context/DepartmentContext';
@@ -25,6 +26,8 @@ const DEFAULT_FORM = {
   periods_per_session: 1,
   back_to_back: true,
   batch_scheduling_mode: 'independent' as BatchSchedulingMode,
+  teachers_required: 1,
+  self_study_hours: 0,
   max_per_day: 1,
   requires_room_type: null as string | null,
   requires_equipment: [] as string[],
@@ -165,6 +168,8 @@ export function SubjectForm() {
       periods_per_session: subject.periods_per_session,
       back_to_back: subject.back_to_back,
       batch_scheduling_mode: subject.batch_scheduling_mode,
+      teachers_required: subject.teachers_required || 1,
+      self_study_hours: subject.self_study_hours || 0,
       max_per_day: subject.max_per_day || 1,
       requires_room_type: subject.requires_room_type,
       requires_equipment: subject.requires_equipment || [],
@@ -280,6 +285,23 @@ export function SubjectForm() {
               </select>
               <p className="text-xs text-gray-500 mt-1">{DELIVERY_MODE_INFO[formData.delivery_mode].hint}</p>
             </div>
+
+            {formData.delivery_mode !== 'IN_PERSON' && (
+              <div>
+                <label htmlFor="self_study_hours" className="block text-sm font-medium text-gray-700 mb-1">
+                  Self-study periods per week
+                </label>
+                <input
+                  id="self_study_hours" type="number" min={0} value={formData.self_study_hours}
+                  onChange={(e) => setFormData({ ...formData, self_study_hours: Math.max(0, Number(e.target.value) || 0) })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Each one holds the class for a single period with no teacher or room, always in the first or last
+                  period of a day so it never leaves a gap between lectures. 0 = not shown on the timetable.
+                </p>
+              </div>
+            )}
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Hours per week, as printed in the scheme (L-T-P)</label>
@@ -414,6 +436,30 @@ export function SubjectForm() {
                 {formData.batch_scheduling_mode === 'parallel' && 'Every batch’s session is forced into the same start slot, each in its own room. Needs one suitable room per batch, free at the same hour.'}
                 {formData.batch_scheduling_mode === 'sequential' && 'Batches can never overlap in time - useful when they must share one teacher or room that can only handle one batch at a time.'}
                 {formData.batch_scheduling_mode === 'merged' && 'All batches are taught together as one class: same slot, same room, same teacher. Needs one room big enough to seat every batch combined - check the lab batches preflight before generating.'}
+              </p>
+              {formData.batch_scheduling_mode === 'parallel' && (
+                <p className="text-xs text-amber-700 mt-1">
+                  Heads up: this needs one qualified teacher per batch, at the same hour. If what you
+                  actually want is "all the labs run together", set up a{' '}
+                  <Link to="/setup/lab-rotations" className="underline">lab rotation</Link> instead -
+                  each batch goes into a different lab, so one teacher per lab is enough.
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label htmlFor="teachers_required" className="block text-sm font-medium text-gray-700 mb-1">
+                Teachers needed at once
+              </label>
+              <input
+                id="teachers_required" type="number" min={1} value={formData.teachers_required}
+                onChange={(e) => setFormData({ ...formData, teachers_required: Math.max(1, Number(e.target.value) || 1) })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                {formData.teachers_required > 1
+                  ? `Every session of this subject books ${formData.teachers_required} qualified teachers at the same time - for a lab that needs a second supervisor on the floor. All of them must be free, and they count toward each one's workload.`
+                  : 'One teacher per session, the normal case. Raise this for a lab that genuinely needs a second supervisor present.'}
               </p>
             </div>
 

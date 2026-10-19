@@ -5,6 +5,7 @@ from app.models.academic_year import AcademicYear
 from app.models.section import Section
 from app.models.lab_batch import LabBatch
 from app.models.elective_group import ElectiveGroup
+from app.models.lab_rotation_group import LabRotationGroup
 from app.models.subject import Subject
 from app.models.subject_type import SubjectType
 from app.models.equipment import Equipment
@@ -16,11 +17,15 @@ from app.models.prerequisite import Prerequisite
 from app.models.time_slot import TimeSlot
 from app.models.constraint_rule import ConstraintRule
 from app.models.constraint_profile import ConstraintProfile
+from app.models.first_year_tile import FirstYearTile
 from app.models.reservation import Reservation
 from app.models.timetable_run import TimetableRun
 from app.models.generated_entry import GeneratedEntry
+from app.models.remedial_group import RemedialGroup
+from app.models.remedial_run import RemedialRun, RemedialEntry
 from app.models.user import User
 from app.models.audit_log import AuditLog
+from app.models.saved_filter import SavedFilter
 
 __all__ = [
     "Institution",
@@ -30,6 +35,7 @@ __all__ = [
     "Section",
     "LabBatch",
     "ElectiveGroup",
+    "LabRotationGroup",
     "Subject",
     "SubjectType",
     "Equipment",
@@ -41,9 +47,14 @@ __all__ = [
     "TimeSlot",
     "ConstraintRule",
     "ConstraintProfile",
+    "FirstYearTile",
     "Reservation",
     "TimetableRun",
     "GeneratedEntry",
+    "RemedialGroup",
+    "RemedialRun",
+    "RemedialEntry",
     "User",
     "AuditLog",
+    "SavedFilter",
 ]

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { timetableApi, departmentsApi, yearsApi, sectionsApi } from '../api/client';
 import { TimetableRun, Department, AcademicYear, Section } from '../types';
 import { Calendar, CheckCircle, XCircle, RefreshCw, Clock, Star, AlertTriangle, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
-import { useInstitutionTimezone, formatInTimezone } from '../hooks/useInstitutionTimezone';
+import { TIMEZONE, formatInTimezone } from '../hooks/timezone';
 import { fuzzyMatches } from '../utils/fuzzySearch';
 
 function getWarnings(run: TimetableRun): string[] {
@@ -24,7 +24,7 @@ export function TimetableRuns() {
   const [search, setSearch] = useState('');
   const [expandedWarnings, setExpandedWarnings] = useState<Set<number>>(new Set());
   const [error, setError] = useState('');
-  const timezone = useInstitutionTimezone();
+  const timezone = TIMEZONE;
 
   useEffect(() => {
     fetchRuns();

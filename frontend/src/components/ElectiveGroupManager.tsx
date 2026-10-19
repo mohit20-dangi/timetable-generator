@@ -4,6 +4,7 @@ import { electiveGroupsApi, subjectsApi } from '../api/client';
 import { ElectiveGroup, ElectivePreflightResult, Subject } from '../types';
 import { useDepartment } from '../context/DepartmentContext';
 import { Plus, Trash2, AlertTriangle, CheckCircle2, Edit, Save, X, DoorOpen, Clock } from 'lucide-react';
+import SelectAllButtons from './SelectAllButtons';
 
 /**
  * A basket (e.g. "Elective-1: 8 options") vs. what's actually OFFERED
@@ -116,17 +117,10 @@ export function ElectiveGroupManager() {
           <input placeholder="ID (e.g. elective1)" value={form.id} onChange={(e) => setForm({ ...form, id: e.target.value })} disabled={!!editingId} className="rounded-lg border border-gray-300 px-3 py-2 disabled:bg-gray-100" />
           <input placeholder="Name (e.g. Elective-1)" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-lg border border-gray-300 px-3 py-2" />
         </div>
-        <div className="mb-2 flex items-center justify-between">
+        <div className="mb-2 flex items-center gap-4">
           <label className="block text-sm font-medium text-gray-700">Which options are offered this term?</label>
           {subjects.length > 0 && (
-            <div className="flex gap-3">
-              <button type="button" onClick={selectAllOffered} className="text-xs text-blue-600 hover:text-blue-800">
-                Select all
-              </button>
-              <button type="button" onClick={clearAllOffered} className="text-xs text-gray-500 hover:text-gray-700">
-                Clear all
-              </button>
-            </div>
+            <SelectAllButtons onSelectAll={selectAllOffered} onClear={clearAllOffered} />
           )}
         </div>
         <div className="mb-3 flex flex-wrap gap-2">

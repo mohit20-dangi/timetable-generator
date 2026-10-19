@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, model_validator, field_serializer
+from pydantic import BaseModel, Field, model_validator, field_serializer, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 
@@ -114,6 +114,13 @@ class TimetableEntryResponse(BaseModel):
     subject_id: Optional[str] = None
     teacher_id: Optional[str] = None
     room_id: Optional[str] = None
+    is_locked: bool = False
+    is_manual: bool = False
+
+    @field_validator("is_locked", "is_manual", mode="before")
+    @classmethod
+    def _none_is_false(cls, v):
+        return bool(v)
 
     class Config:
         from_attributes = True

@@ -13,3 +13,7 @@ class ConstraintProfile(Base):
     department_id = Column(String, ForeignKey("departments.id"), nullable=True)
     name = Column(String, nullable=False)
     soft_constraint_weights = Column(JSON, default=dict)
+    # Numbers typed next to the rules that take one, e.g.
+    # {"max_consecutive_teaching": 2} - see weights.RULE_PARAM_DEFAULTS.
+    # NULL (a profile saved before this column existed) means all defaults.
+    rule_params = Column(JSON, default=dict, nullable=True)

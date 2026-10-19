@@ -9,12 +9,14 @@ class DepartmentBase(BaseModel):
 
 class DepartmentCreate(DepartmentBase):
     id: str
-    institution_id: str
+
+
+class DepartmentUpdate(DepartmentBase):
+    pass
 
 
 class DepartmentResponse(DepartmentBase):
     id: str
-    institution_id: str
 
     class Config:
         from_attributes = True

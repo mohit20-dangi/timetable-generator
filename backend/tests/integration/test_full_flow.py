@@ -2,7 +2,7 @@
 -> independently validate -> publish -> per-user scoped view. Mirrors
 seed_example.py but as permanent, assertion-backed regression coverage.
 """
-ADMIN = {"email": "admin@test.edu", "password": "TestPassword123!", "full_name": "Admin", "role": "ADMIN"}
+ADMIN = {"email": "admin@test.edu", "password": "TestPassword123!", "full_name": "Admin", "role": "SUPERADMIN"}
 
 
 def _auth_headers(client, email, password):
@@ -12,7 +12,6 @@ def _auth_headers(client, email, password):
 
 
 def _build_department(client, headers):
-    client.post("/api/institutions/", json={"id": "inst1", "name": "Test Institute"}, headers=headers)
     client.post("/api/departments/", json={"id": "cse", "institution_id": "inst1", "name": "CSE"}, headers=headers)
 
     days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
@@ -78,17 +77,12 @@ def test_full_generation_flow(client):
     validation = client.get(f"/api/timetable/runs/{run_id}/validate", headers=headers).json()
     assert validation["valid"], validation["issues"]
 
-    # publish, then check the scoped /me view for a registered faculty/student
+    # publish, then check the public (no-login) section view
     pub = client.post(f"/api/timetable/runs/{run_id}/publish", headers=headers)
     assert pub.status_code == 200, pub.text
 
-    client.post("/api/auth/register", json={
-        "email": "student@test.edu", "password": "TestPassword123!", "full_name": "Stu",
-        "role": "STUDENT", "section_id": "sec_a",
-    }, headers=headers)
-    student_headers = _auth_headers(client, "student@test.edu", "TestPassword123!")
-    my_schedule = client.get("/api/timetable/me", headers=student_headers).json()
-    assert len(my_schedule) == len(entries)
+    public_schedule = client.get("/api/timetable/public/section/sec_a").json()
+    assert len(public_schedule) == len(entries)
 
     # PDF export must render a grid with real entries, not just an empty
     # run (the entity_type NameError this guards against only surfaces
@@ -158,7 +152,6 @@ def test_merged_lab_batches_share_room_and_teacher_end_to_end(client):
     assert r.status_code == 200, r.text
     headers = _auth_headers(client, ADMIN["email"], ADMIN["password"])
 
-    client.post("/api/institutions/", json={"id": "inst1", "name": "Test"}, headers=headers)
     client.post("/api/departments/", json={"id": "cse", "institution_id": "inst1", "name": "CSE"}, headers=headers)
     for day in ["Mon", "Tue", "Wed"]:
         for i, (start, end) in enumerate([("09:00", "09:50"), ("09:50", "10:40")], start=1):
@@ -212,7 +205,6 @@ def test_infeasible_generation_reports_named_cause(client):
     r = client.post("/api/auth/bootstrap-admin", json=ADMIN)
     headers = _auth_headers(client, ADMIN["email"], ADMIN["password"])
 
-    client.post("/api/institutions/", json={"id": "inst1", "name": "Test"}, headers=headers)
     client.post("/api/departments/", json={"id": "cse", "institution_id": "inst1", "name": "CSE"}, headers=headers)
     client.post("/api/constraints/time-slots", json={
         "id": "Mon_1", "day": "Mon", "period_index": 1, "start_time": "09:00", "end_time": "09:50",
@@ -238,7 +230,6 @@ def test_fit_into_existing_scope_freezes_other_sections(client):
     r = client.post("/api/auth/bootstrap-admin", json=ADMIN)
     headers = _auth_headers(client, ADMIN["email"], ADMIN["password"])
 
-    client.post("/api/institutions/", json={"id": "inst1", "name": "Test"}, headers=headers)
     client.post("/api/departments/", json={"id": "cse", "institution_id": "inst1", "name": "CSE"}, headers=headers)
     for i in range(1, 3):  # only 2 slots on purpose - forces the shared teacher into a real conflict if not frozen
         client.post("/api/constraints/time-slots", json={

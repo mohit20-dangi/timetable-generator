@@ -32,6 +32,8 @@ from ortools.sat.python import cp_model
 
 from app.solver.types import ProblemData, SessionDemand
 from app.solver.calendar import DAY_ORDER, occupied_indices, contiguous_day_runs
+from app.solver.custom_rules import apply_custom_rules
+from app.solver.priority_rules import apply_priority_rules
 
 
 @dataclass
@@ -39,6 +41,7 @@ class GroupVars:
     demand_ids: List[str]
     eligible_teacher_ids: List[str]
     presence_teacher: Dict[str, "cp_model.IntVar"]  # teacher_id -> BoolVar, shared by every demand in the group
+    required_teachers: int = 1  # how many of presence_teacher are set (Subject.teachers_required)
 
 
 @dataclass
@@ -127,12 +130,34 @@ def build_model(problem: ProblemData) -> ModelVars:
     for group_key, group_demands in groups.items():
         eligible_teachers = sorted(set(group_demands[0].eligible_teacher_ids))
         presence_teacher = {t: model.NewBoolVar(f"grpteach_{group_key}_{t}") for t in eligible_teachers}
+        # HARD (3.1): a subject may need several teachers in the room at
+        # once (a lab with a second supervisor). Exactly that many distinct
+        # eligible teachers are chosen, and - because these booleans are
+        # shared by every session of the (subject, audience) group, the same
+        # mechanism that has always given teacher consistency - it is the
+        # same set of people every week, not a different pair each session.
+        required_teachers = max(1, group_demands[0].teachers_required)
         if eligible_teachers:
-            model.AddExactlyOne(list(presence_teacher.values()))
+            if required_teachers > len(eligible_teachers):
+                raise ValueError(
+                    f"{group_demands[0].subject_name} (for {group_demands[0].audience_id}) needs "
+                    f"{required_teachers} teachers at the same time, but only "
+                    f"{len(eligible_teachers)} teacher(s) are qualified to teach it. Qualify more "
+                    f"teachers for it, or lower its 'teachers required' setting."
+                )
+            if required_teachers == 1:
+                model.AddExactlyOne(list(presence_teacher.values()))
+            else:
+                model.Add(sum(presence_teacher.values()) == required_teachers)
+            # Secondary teachers assist; they never run a session alone.
+            main_ids = [t for t in group_demands[0].main_teacher_ids if t in presence_teacher]
+            if main_ids and len(main_ids) < len(presence_teacher):
+                model.Add(sum(presence_teacher[t] for t in main_ids) >= 1)
         group_vars[group_key] = GroupVars(
             demand_ids=[d.id for d in group_demands],
             eligible_teacher_ids=eligible_teachers,
             presence_teacher=presence_teacher,
+            required_teachers=required_teachers,
         )
 
         for demand in group_demands:
@@ -174,6 +199,8 @@ def build_model(problem: ProblemData) -> ModelVars:
                             ).OnlyEnforceIf(p)
                         else:
                             model.Add(p == 0)
+            if demand.self_study:
+                continue  # holds the section only: no room, and no teacher group members
             if not room_presences:
                 raise ValueError(
                     f"Demand {demand.id} ({demand.subject_name}) has no eligible room - "
@@ -336,6 +363,48 @@ def build_model(problem: ProblemData) -> ModelVars:
         if len(combined) > 1:
             model.AddNoOverlap(combined)
 
+    # ---- HARD: a section attending someone else's class (a repeater section
+    # sitting in its host's class, or a remedial group's member sections) can
+    # not be in two places at once. The attending demand joins the section's
+    # own no-overlap set - its section-level and batch classes - so the class
+    # never lands on top of anything those students already attend.
+    demands_by_attending_section: Dict[str, List[SessionDemand]] = {}
+    for demand in problem.demands:
+        for attending_id in demand.attending_section_ids:
+            demands_by_attending_section.setdefault(attending_id, []).append(demand)
+    for attending_id, attended in demands_by_attending_section.items():
+        combined = _overlap_intervals_collapsing_electives(attended, model, start, occupancy_interval)
+        combined += section_level_intervals_by_section.get(attending_id, [])
+        for own_demand in demands_by_section.get(attending_id, []):
+            if own_demand.audience_type == "batch":
+                combined.append(occupancy_interval[own_demand.id])
+        # Own demands may already be among `attended` (a section attending a
+        # class that is also its own); dedupe by interval identity so
+        # AddNoOverlap never sees one interval twice.
+        unique = list({id(iv): iv for iv in combined}.values())
+        if len(unique) > 1:
+            model.AddNoOverlap(unique)
+
+    # ---- HARD: slots an attending section is already committed to by a
+    # timetable outside this solve (see ProblemData.section_busy_slot_indices).
+    for attending_id, attended in demands_by_attending_section.items():
+        busy = problem.section_busy_slot_indices.get(attending_id)
+        if not busy:
+            continue
+        for demand in attended:
+            allowed = sorted(
+                v for v in demand.valid_start_slot_indices
+                if not (set(occupied_indices(v, demand.duration, slots_by_index)) & busy)
+            )
+            if len(allowed) == len(demand.valid_start_slot_indices):
+                continue
+            if not allowed:
+                raise ValueError(
+                    f"{demand.subject_name} ({demand.id}) attended by section {attending_id} has no "
+                    "start slot left that avoids that section's already-scheduled classes."
+                )
+            model.AddLinearExpressionInDomain(start[demand.id], cp_model.Domain.FromValues(allowed))
+
     # ---- HARD: same (subject, audience) at most max_per_day times/day ----
     for group_key, group_demands in groups.items():
         max_per_day = group_demands[0].max_per_day
@@ -375,6 +444,112 @@ def build_model(problem: ProblemData) -> ModelVars:
             for other in members[1:]:
                 model.Add(start[other.id] == anchor)
 
+    # ---- HARD (3.1): lab rotations. A LabRotationGroup names several lab
+    # subjects one section runs AS A ROTATION: in each round every batch is
+    # in a DIFFERENT one of those labs, and next round they swap, until
+    # every batch has done every lab.
+    #
+    # Encoding. Each (subject, session_index) in the group is one
+    # "activity"; with A activities there are exactly A rounds, each round
+    # one shared block of time (round_start[r]). Every member demand - one
+    # per (batch, activity) - gets a round variable, and its start is tied
+    # to that round's start with AddElement. Two AllDifferent families then
+    # say the whole thing:
+    #   * per batch, across activities: a batch is in one place per round,
+    #     and over the A rounds does every activity exactly once;
+    #   * per activity, across batches: at most one batch is in a given lab
+    #     in a given round - which is precisely why a rotation is cheap in
+    #     staff. Three parallel batches of ONE lab need three qualified
+    #     teachers; three batches rotating through three labs need one
+    #     teacher each, because each lab only ever runs once at a time.
+    # Rounds cannot collide in time without a batch being in two places at
+    # once, which the per-audience NoOverlap below already forbids; the
+    # AllDifferent over round_start is redundant with that on purpose, to
+    # give the solver that deduction up front instead of making it search
+    # for it.
+    rotation_demands_by_group: Dict[str, List[SessionDemand]] = {}
+    for demand in problem.demands:
+        if demand.rotation_group_id and demand.audience_type == "batch":
+            rotation_demands_by_group.setdefault(demand.rotation_group_id, []).append(demand)
+
+    rotation_member_demand_ids = {
+        d.id for members in rotation_demands_by_group.values() for d in members
+    }
+
+    for rotation in problem.rotation_groups:
+        members = rotation_demands_by_group.get(rotation.id, [])
+        if not members:
+            continue
+        activities = sorted({(d.subject_id, d.session_index) for d in members})
+        batch_ids = sorted({d.audience_id for d in members})
+        num_rounds = len(activities)
+        if num_rounds < 2 or len(batch_ids) < 2:
+            continue
+        if len(batch_ids) > num_rounds:
+            raise ValueError(
+                f"Lab rotation '{rotation.label}' has {len(batch_ids)} lab batches but only "
+                f"{num_rounds} lab session(s) to rotate them through, so at least two batches "
+                f"would have to be in the same lab at the same time. Add another lab to the "
+                f"rotation, give its labs more sessions per week, or use fewer batches."
+            )
+
+        by_batch_activity = {(d.audience_id, (d.subject_id, d.session_index)): d for d in members}
+        missing = [
+            (b, a) for b in batch_ids for a in activities if (b, a) not in by_batch_activity
+        ]
+        if missing:
+            # Every batch must take every lab in the rotation for the Latin
+            # square to exist at all; a half-populated group is a data
+            # problem, not something to silently schedule as if it weren't.
+            subject_id, _idx = missing[0][1]
+            raise ValueError(
+                f"Lab rotation '{rotation.label}': batch {missing[0][0]} has no session of "
+                f"{subject_id} to rotate into. Every batch in a rotation must take every lab in "
+                f"it - check the section's lab batches and subject mapping."
+            )
+
+        # The rounds share one pool of start slots: whatever every member
+        # can legally start at, narrowed to the admin's pinned window.
+        common_starts = set(members[0].valid_start_slot_indices)
+        for d in members[1:]:
+            common_starts &= set(d.valid_start_slot_indices)
+        if rotation.allowed_start_slot_indices is not None:
+            common_starts &= set(rotation.allowed_start_slot_indices)
+        common_starts = sorted(common_starts)
+        if len(common_starts) < num_rounds:
+            raise ValueError(
+                f"Lab rotation '{rotation.label}' needs {num_rounds} separate blocks of time that "
+                f"all of its labs can use, but only {len(common_starts)} such start time(s) exist"
+                + (" inside the day/time window it is pinned to" if rotation.allowed_start_slot_indices is not None else "")
+                + ". Widen the window, add time slots, or take a lab out of the rotation."
+            )
+
+        round_start = []
+        for r in range(num_rounds):
+            round_start.append(model.NewIntVarFromDomain(
+                cp_model.Domain.FromValues(common_starts), f"rotstart_{rotation.id}_{r}"
+            ))
+        model.AddAllDifferent(round_start)
+        # Break the rounds' interchangeability: without this the solver can
+        # relabel the same schedule A! ways, which is pure wasted search.
+        for r in range(num_rounds - 1):
+            model.Add(round_start[r] < round_start[r + 1])
+
+        round_of: Dict[str, "cp_model.IntVar"] = {}
+        for batch_id in batch_ids:
+            for activity in activities:
+                demand = by_batch_activity[(batch_id, activity)]
+                round_var = model.NewIntVar(0, num_rounds - 1, f"rot_{rotation.id}_{demand.id}")
+                round_of[demand.id] = round_var
+                model.AddElement(round_var, round_start, start[demand.id])
+
+        for batch_id in batch_ids:
+            model.AddAllDifferent([round_of[by_batch_activity[(batch_id, a)].id] for a in activities])
+        for activity in activities:
+            model.AddAllDifferent([
+                round_of[by_batch_activity[(b, activity)].id] for b in batch_ids
+            ])
+
     # ---- HARD (1.5 / 2.9): batch scheduling mode. Either the admin marked
     # the soft "parallel_lab_batches" preference "must have" (legacy
     # Phase 1.5 promotion - treated as "at least parallel" for any batch
@@ -389,6 +564,13 @@ def build_model(problem: ProblemData) -> ModelVars:
     by_subject_section_session: Dict[Tuple[str, str, int], List[SessionDemand]] = {}
     for demand in problem.demands:
         if demand.audience_type != "batch":
+            continue
+        if demand.id in rotation_member_demand_ids:
+            # The rotation above already placed this demand. batch_mode can
+            # only talk about one subject's own batches, so applying it here
+            # too would at best duplicate the rotation and at worst (mode
+            # "parallel", or a must_have_parallel profile) demand the exact
+            # opposite - every batch in the SAME lab at once.
             continue
         key = (demand.subject_id, demand.parent_section_id, demand.session_index)
         by_subject_section_session.setdefault(key, []).append(demand)
@@ -454,6 +636,15 @@ def build_model(problem: ProblemData) -> ModelVars:
         presence_room=presence_room, group_of_demand=group_of_demand, groups=group_vars,
     )
     mv.objective_terms.extend(split_session_terms)
+
+    # Admin-defined preferences (hard ones become constraints, soft ones
+    # append objective terms) - see app/solver/custom_rules.py.
+    apply_custom_rules(mv, problem, slots_by_index, _membership_indicator, groups, group_vars)
+
+    # Teacher-comfort and week-shape priorities (consecutive teaching, daily
+    # caps, lighter day, repeated subjects, ...) - see priority_rules.py.
+    days_present = sorted({s.day for s in problem.slots}, key=lambda d: DAY_ORDER.index(d) if d in DAY_ORDER else 99)
+    apply_priority_rules(mv, problem, slots_by_index, _membership_indicator, groups, days_present)
 
     _add_soft_objective(
         mv, problem, slots_by_index, sentinel_high, sentinel_low,
@@ -746,54 +937,22 @@ def _add_soft_objective(mv, problem, slots_by_index, sentinel_high, sentinel_low
                 model.AddAbsEquality(abs_diff, diff)
                 objective_terms.append((abs_diff, parallel_weight))
 
-    # ---- ConstraintRule soft avoid-slot preferences (1.4, priority="soft") ----
+    # ---- soft "section unavailable" ConstraintRules (1.4, priority="soft").
+    # Teacher and room unavailability are always hard (see data_loader), so
+    # a section is the only thing still avoided by weight rather than forbidden.
     for rule_idx, rule in enumerate(problem.soft_avoid_rules):
         if rule.weight <= 0 or not rule.slot_indices:
             continue
-        if rule.scope == "teacher":
-            for group_key, group_demands in groups.items():
-                presence = mv.groups[group_key].presence_teacher.get(rule.resource_id)
-                if presence is None:
-                    continue
-                for demand in group_demands:
-                    hits = membership_indicator(
-                        model, mv.start[demand.id], demand.valid_start_slot_indices,
-                        [v for v in demand.valid_start_slot_indices if v in rule.slot_indices],
-                        f"ruleavoid_{rule_idx}_{demand.id}",
-                    )
-                    if hits is None:
-                        continue
-                    both = model.NewBoolVar(f"ruleavoidboth_{rule_idx}_{demand.id}")
-                    model.AddBoolAnd([presence, hits]).OnlyEnforceIf(both)
-                    model.AddBoolOr([presence.Not(), hits.Not()]).OnlyEnforceIf(both.Not())
-                    objective_terms.append((both, rule.weight))
-        elif rule.scope == "room":
-            for demand in problem.demands:
-                presence = mv.presence_room.get((demand.id, rule.resource_id))
-                if presence is None:
-                    continue
-                hits = membership_indicator(
-                    model, mv.start[demand.id], demand.valid_start_slot_indices,
-                    [v for v in demand.valid_start_slot_indices if v in rule.slot_indices],
-                    f"ruleavoidroom_{rule_idx}_{demand.id}",
-                )
-                if hits is None:
-                    continue
-                both = model.NewBoolVar(f"ruleavoidroomboth_{rule_idx}_{demand.id}")
-                model.AddBoolAnd([presence, hits]).OnlyEnforceIf(both)
-                model.AddBoolOr([presence.Not(), hits.Not()]).OnlyEnforceIf(both.Not())
-                objective_terms.append((both, rule.weight))
-        elif rule.scope == "section":
-            for demand in problem.demands:
-                if demand.parent_section_id != rule.resource_id:
-                    continue
-                hits = membership_indicator(
-                    model, mv.start[demand.id], demand.valid_start_slot_indices,
-                    [v for v in demand.valid_start_slot_indices if v in rule.slot_indices],
-                    f"ruleavoidsection_{rule_idx}_{demand.id}",
-                )
-                if hits is not None:
-                    objective_terms.append((hits, rule.weight))
+        for demand in problem.demands:
+            if demand.parent_section_id != rule.resource_id:
+                continue
+            hits = membership_indicator(
+                model, mv.start[demand.id], demand.valid_start_slot_indices,
+                [v for v in demand.valid_start_slot_indices if v in rule.slot_indices],
+                f"ruleavoidsection_{rule_idx}_{demand.id}",
+            )
+            if hits is not None:
+                objective_terms.append((hits, rule.weight))
 
     if objective_terms:
         model.Minimize(sum(var * weight for var, weight in objective_terms))

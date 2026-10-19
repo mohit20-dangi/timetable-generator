@@ -7,7 +7,9 @@ from app.schemas import (
     ElectiveGroupCreate, ElectiveGroupResponse,
     ElectivePreflightResponse, ElectivePreflightIssue,
 )
-from app.auth.dependencies import get_current_user, require_admin
+from app.auth.dependencies import get_current_user, require_dept_admin
+from app.auth.scope import assert_can_manage, get_scoped_or_404, scoped, target_department
+from app.services.department_calendar import department_time_slots
 
 
 def _room_available_at(room: Room, day: str, start, end) -> bool:
@@ -42,11 +44,22 @@ def _max_rooms_free_together(rooms: List[Room], slots: List[TimeSlot]) -> int:
 router = APIRouter(prefix="/api/elective-groups", tags=["Elective Groups"])
 
 
+def _assert_offered_in_department(db: Session, admin: User, subject_ids) -> None:
+    for subject_id in subject_ids or []:
+        subject = db.get(Subject, subject_id)
+        if subject is None:
+            raise HTTPException(status_code=400, detail=f"Unknown subject '{subject_id}'")
+        assert_can_manage(admin, subject.department_id)
+
+
 @router.post("/", response_model=ElectiveGroupResponse)
-def create_elective_group(payload: ElectiveGroupCreate, db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
+def create_elective_group(payload: ElectiveGroupCreate, db: Session = Depends(get_db), admin: User = Depends(require_dept_admin)):
     if db.query(ElectiveGroup).filter(ElectiveGroup.id == payload.id).first():
         raise HTTPException(status_code=409, detail="An elective group with this id already exists")
-    record = ElectiveGroup(**payload.model_dump())
+    data = payload.model_dump()
+    data["department_id"] = target_department(admin, data.get("department_id"))
+    _assert_offered_in_department(db, admin, data.get("offered_subject_ids"))
+    record = ElectiveGroup(**data)
     db.add(record)
     db.commit()
     db.refresh(record)
@@ -54,15 +67,14 @@ def create_elective_group(payload: ElectiveGroupCreate, db: Session = Depends(ge
 
 
 @router.get("/", response_model=List[ElectiveGroupResponse])
-def list_elective_groups(db: Session = Depends(get_db), _user: User = Depends(get_current_user)):
-    return db.query(ElectiveGroup).all()
+def list_elective_groups(department_id: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    return scoped(db.query(ElectiveGroup), ElectiveGroup, user, department_id).all()
 
 
 @router.put("/{group_id}", response_model=ElectiveGroupResponse)
-def update_elective_group(group_id: str, payload: ElectiveGroupCreate, db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
-    record = db.query(ElectiveGroup).filter(ElectiveGroup.id == group_id).first()
-    if not record:
-        raise HTTPException(status_code=404, detail="Elective group not found")
+def update_elective_group(group_id: str, payload: ElectiveGroupCreate, db: Session = Depends(get_db), admin: User = Depends(require_dept_admin)):
+    record = get_scoped_or_404(db, ElectiveGroup, group_id, admin, "Elective group")
+    _assert_offered_in_department(db, admin, payload.offered_subject_ids)
     for key, value in payload.model_dump(exclude={"id", "department_id"}).items():
         setattr(record, key, value)
     db.commit()
@@ -71,17 +83,15 @@ def update_elective_group(group_id: str, payload: ElectiveGroupCreate, db: Sessi
 
 
 @router.delete("/{group_id}")
-def delete_elective_group(group_id: str, db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
-    record = db.query(ElectiveGroup).filter(ElectiveGroup.id == group_id).first()
-    if not record:
-        raise HTTPException(status_code=404, detail="Elective group not found")
+def delete_elective_group(group_id: str, db: Session = Depends(get_db), admin: User = Depends(require_dept_admin)):
+    record = get_scoped_or_404(db, ElectiveGroup, group_id, admin, "Elective group")
     db.delete(record)
     db.commit()
     return {"message": "Elective group deleted"}
 
 
 @router.get("/{group_id}/preflight", response_model=ElectivePreflightResponse)
-def preflight_elective_group(group_id: str, db: Session = Depends(get_db), _user: User = Depends(get_current_user)):
+def preflight_elective_group(group_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Checks, in plain language, whether the offered options in this
     basket can actually be co-scheduled: are there enough rooms free in
     some common slot, and enough qualified teachers, for every offered
@@ -90,9 +100,7 @@ def preflight_elective_group(group_id: str, db: Session = Depends(get_db), _user
     infeasible" into "you've offered 5 options but only have 3 rooms"
     before the admin ever clicks Generate.
     """
-    group = db.query(ElectiveGroup).filter(ElectiveGroup.id == group_id).first()
-    if not group:
-        raise HTTPException(status_code=404, detail="Elective group not found")
+    group = get_scoped_or_404(db, ElectiveGroup, group_id, user, "Elective group")
 
     offered = group.offered_subject_ids or []
     issues: List[ElectivePreflightIssue] = []
@@ -119,7 +127,7 @@ def preflight_elective_group(group_id: str, db: Session = Depends(get_db), _user
         or room.department_id == group.department_id
         or group.department_id in (room.shared_with_departments or [])
     ]
-    bell_schedule = db.query(TimeSlot).all()
+    bell_schedule = department_time_slots(db, group.department_id)
     rooms_available = _max_rooms_free_together(usable_rooms, bell_schedule)
     qualified_teacher_ids = set()
     for row in db.query(TeacherSubject).filter(TeacherSubject.subject_id.in_(offered)).all():

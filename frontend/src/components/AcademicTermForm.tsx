@@ -3,6 +3,7 @@ import { academicTermsApi } from '../api/client';
 import { AcademicTerm } from '../types';
 import { useDepartment } from '../context/DepartmentContext';
 import { Plus, Trash2 } from 'lucide-react';
+import SelectAllButtons from './SelectAllButtons';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -72,16 +73,9 @@ export function AcademicTermForm() {
           <label className="text-sm text-gray-700">End date<input type="date" value={form.end_date} onChange={(e) => setForm({ ...form, end_date: e.target.value })} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2" /></label>
         </div>
         <div>
-          <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-4 mb-1">
             <label className="block text-sm text-gray-700">Working days</label>
-            <div className="flex gap-3">
-              <button type="button" onClick={selectAllDays} className="text-xs text-blue-600 hover:text-blue-800">
-                Select all
-              </button>
-              <button type="button" onClick={clearAllDays} className="text-xs text-gray-500 hover:text-gray-700">
-                Clear all
-              </button>
-            </div>
+            <SelectAllButtons onSelectAll={selectAllDays} onClear={clearAllDays} />
           </div>
           <div className="flex flex-wrap gap-2">
             {DAYS.map((day) => (

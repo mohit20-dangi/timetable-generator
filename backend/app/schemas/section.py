@@ -5,6 +5,7 @@ from typing import Optional
 class SectionBase(BaseModel):
     name: str
     strength: int = 60
+    is_repeater: bool = False
 
 
 class SectionCreate(SectionBase):

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Time, Boolean, Integer, ForeignKey
+from sqlalchemy import Column, String, Time, Boolean, Integer, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from app.db import Base
 
@@ -24,6 +24,11 @@ class ConstraintRule(Base):
     (e.g. "the only teacher qualified for this subject is free Tue 10-12,
     so merge the batches then" - the window explains *why* a mode is being
     forced, not just *that* it is).
+
+    Admin-defined preferences: subject_time_window | max_subjects_per_day |
+    teacher_max_days_per_week. Each is a parameterised template (its
+    parameters live in `params`), usable as hard (never violated) or soft
+    (penalised by `weight` per violation). See app/solver/custom_rules.py.
     """
     __tablename__ = "constraint_rules"
 
@@ -38,6 +43,10 @@ class ConstraintRule(Base):
     priority = Column(String, default="hard")  # hard | soft
     weight = Column(Integer, default=0)  # used only when priority == soft
     batch_mode = Column(String, nullable=True)  # used only when rule_type == batch_scheduling_mode
+    # Template parameters for the admin-defined "custom preference" rule
+    # types (see app/solver/custom_rules.py::TEMPLATES) - e.g.
+    # {"max": 3} or {"mode": "avoid"}. Null for every older rule type.
+    params = Column(JSON, nullable=True)
     description = Column(String, nullable=True)
     source = Column(String, default="manual")  # manual | ai_parsed
     raw_instruction = Column(String, nullable=True)

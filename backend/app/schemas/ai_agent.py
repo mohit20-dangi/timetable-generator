@@ -27,3 +27,4 @@ class AgentApplyRequest(BaseModel):
 class AgentApplyResponse(BaseModel):
     applied: int
     audit_log_ids: List[int]
+    skipped: List[str] = []  # actions not applied, each with the reason

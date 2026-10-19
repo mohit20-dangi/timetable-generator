@@ -16,6 +16,16 @@ interface Props {
  * never re-asking the model. See app/services/ai_agent.py's module
  * docstring on the backend for why this boundary is non-negotiable.
  */
+// The server's detail already says what failed and why; the fallbacks cover
+// the cases where no server answer exists at all.
+function describeError(err: any, prefix: string): string {
+  const detail = err.response?.data?.detail;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) return `${prefix}: ${detail.map((d: any) => d.msg).join('; ')}`;
+  if (err.request) return `${prefix}: could not reach the server. Check your connection and try again. Nothing was changed.`;
+  return `${prefix}: ${err.message}`;
+}
+
 export function AIAssistantPanel({ departmentId }: Props) {
   const [instruction, setInstruction] = useState('');
   const [loading, setLoading] = useState(false);
@@ -24,6 +34,8 @@ export function AIAssistantPanel({ departmentId }: Props) {
   const [summary, setSummary] = useState<string | null>(null);
   const [actions, setActions] = useState<AgentProposedAction[]>([]);
   const [applied, setApplied] = useState(false);
+  const [appliedCount, setAppliedCount] = useState(0);
+  const [skipped, setSkipped] = useState<string[]>([]);
 
   const runPlan = async () => {
     if (!instruction.trim() || !departmentId) return;
@@ -32,12 +44,13 @@ export function AIAssistantPanel({ departmentId }: Props) {
     setSummary(null);
     setActions([]);
     setApplied(false);
+    setSkipped([]);
     try {
       const response = await aiAgentApi.plan(departmentId, instruction);
       setSummary(response.data.summary);
       setActions(response.data.actions);
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'The AI assistant is unavailable right now.');
+      setError(describeError(err, 'Planning failed'));
     } finally {
       setLoading(false);
     }
@@ -52,11 +65,13 @@ export function AIAssistantPanel({ departmentId }: Props) {
     setApplying(true);
     setError(null);
     try {
-      await aiAgentApi.apply(departmentId, instruction, actions);
+      const response = await aiAgentApi.apply(departmentId, instruction, actions);
+      setSkipped(response.data.skipped || []);
+      setAppliedCount(response.data.applied);
       setApplied(true);
       setActions([]);
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to apply the changes.');
+      setError(describeError(err, 'Applying failed'));
     } finally {
       setApplying(false);
     }
@@ -66,12 +81,14 @@ export function AIAssistantPanel({ departmentId }: Props) {
     <div className="rounded-lg border border-purple-200 bg-purple-50 p-4">
       <h3 className="flex items-center gap-2 font-semibold text-purple-900">
         <Sparkles size={20} />
-        AI Assistant
+        Edit setup data with AI
       </h3>
       <p className="mt-1 text-sm text-purple-800">
         Tell it what you want changed in plain English - e.g. "Increase every teacher's max daily
         classes by 1" or "Prof. Sharma is unavailable Friday afternoons". It will propose the exact
-        changes for you to review; nothing is applied until you click Apply.
+        changes for you to review; nothing is applied until you click Apply. Once applied, the
+        changes are saved to your setup data (teacher limits and scheduling rules) and recorded in
+        the audit trail. To set solver priorities instead, use Scheduling Rules.
       </p>
 
       <div className="mt-3 flex gap-2">
@@ -100,7 +117,16 @@ export function AIAssistantPanel({ departmentId }: Props) {
       {applied && (
         <div className="mt-3 flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800">
           <CheckCircle size={18} />
-          Changes applied and logged to the audit trail.
+          {appliedCount} change{appliedCount === 1 ? '' : 's'} applied and logged to the audit trail.
+        </div>
+      )}
+
+      {skipped.length > 0 && (
+        <div className="mt-3 rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-900">
+          <p className="font-medium">{skipped.length} change{skipped.length === 1 ? ' was' : 's were'} not applied:</p>
+          <ul className="list-disc pl-5">
+            {skipped.map((reason) => <li key={reason}>{reason}</li>)}
+          </ul>
         </div>
       )}
 

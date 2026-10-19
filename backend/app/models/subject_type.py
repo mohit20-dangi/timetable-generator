@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Boolean
+from sqlalchemy import Column, String, Integer, Boolean, ForeignKey
 from app.db import Base
 
 
@@ -15,3 +15,6 @@ class SubjectType(Base):
     default_room_type = Column(String, nullable=True)  # lecture, lab, seminar
     colour_hex = Column(String, nullable=False, default="E5E7EB")
     is_builtin = Column(Boolean, default=False)
+    # Built-in types are shared by every department (every subject depends
+    # on them); a type an admin adds belongs to their department only.
+    department_id = Column(String, ForeignKey("departments.id"), nullable=True)

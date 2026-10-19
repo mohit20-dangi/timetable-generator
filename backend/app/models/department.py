@@ -15,7 +15,10 @@ class Department(Base):
     __tablename__ = "departments"
 
     id = Column(String, primary_key=True, index=True)
-    institution_id = Column(String, ForeignKey("institutions.id"), nullable=False)
+    # Departments used to hang off an institution; that level was removed
+    # from the product. The column stays (nullable) so existing databases
+    # keep working without a table rebuild.
+    institution_id = Column(String, ForeignKey("institutions.id"), nullable=True)
     name = Column(String, nullable=False)
     code = Column(String, nullable=True)
 

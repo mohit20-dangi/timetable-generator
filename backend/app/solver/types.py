@@ -81,6 +81,48 @@ class SessionDemand:
     #     combined strength (data_loader filters eligible_room_ids
     #     accordingly before this ever reaches the model).
     batch_mode: str = "independent"
+    # Phase 3.1: how many DISTINCT eligible teachers this one session needs
+    # at the same time (Subject.teachers_required). 1 for everything that
+    # isn't a co-supervised lab.
+    teachers_required: int = 1
+    # Phase 3.1: the LabRotationGroup this demand belongs to, if any. A
+    # rotation member is scheduled by the rotation block in model_builder
+    # (shared round start slots, one subject per batch per round) and is
+    # deliberately EXEMPT from batch_mode, which can only ever talk about
+    # one subject's own batches.
+    rotation_group_id: Optional[str] = None
+    # Extra sections whose students sit in this class without owning it: a
+    # repeater section attending its host section's class, or the sections a
+    # remedial group draws its students from. They are never given a persisted
+    # entry of their own, but the class must not overlap anything they attend.
+    attending_section_ids: List[str] = field(default_factory=list)
+    # A self-study block (an NPTEL elective): holds the section for one
+    # period at the very start or end of a day, with no teacher and no room.
+    self_study: bool = False
+    # Teachers (a subset of eligible_teacher_ids) who may run the session;
+    # the rest of the eligible teachers only assist. Empty = no distinction.
+    main_teacher_ids: List[str] = field(default_factory=list)
+
+
+@dataclass
+class RotationGroup:
+    """A set of lab subjects one section runs as a rotation (see
+    app/models/lab_rotation_group.py). Every (subject, session_index) pair
+    in the group is one "activity"; the group runs in as many equal-length
+    rounds as there are activities, and in each round every batch is in a
+    different activity. That is what makes a rotation cheap in staff: the
+    group may hold three 3-batch labs and still only ever need ONE teacher
+    per subject at a time, where three parallel batches of a single lab
+    would need three.
+
+    `allowed_start_slot_indices` is None for "anywhere a session fits", or
+    the slot indices of the admin's pinned window (e.g. Monday 14:00-16:00).
+    """
+    id: str
+    label: str
+    section_id: str
+    subject_ids: List[str]
+    allowed_start_slot_indices: Optional[set] = None
 
 
 @dataclass
@@ -96,14 +138,30 @@ class FixedBooking:
 
 @dataclass
 class SoftAvoidRule:
-    """One `priority="soft"` ConstraintRule (see Phase 1.4): a preference
-    that a teacher/room/section NOT be scheduled in `slot_indices`,
+    """One `priority="soft"` "section unavailable" ConstraintRule (see Phase
+    1.4): a preference that a section NOT be scheduled in `slot_indices`,
     contributing `weight` to the objective per period placed there instead
-    of forbidding it outright the way a hard rule would."""
-    scope: str  # teacher | room | section
+    of forbidding it outright the way a hard rule would. (Teacher and room
+    unavailability are always hard, so they never become one of these.)"""
+    scope: str  # section
     resource_id: str
     slot_indices: set = field(default_factory=set)
     weight: int = 0
+
+
+@dataclass
+class CustomRule:
+    """One admin-defined preference (a ConstraintRule whose rule_type is a
+    template in app/solver/custom_rules.py), already resolved to solver
+    terms - slot indices, not day/time strings."""
+    kind: str  # subject_time_window | max_subjects_per_day | teacher_max_days_per_week
+    hard: bool
+    weight: int  # penalty per violation; only used when hard is False
+    target_id: str  # subject / section ("*" = every section) / teacher id
+    slot_indices: set = field(default_factory=set)  # subject_time_window only
+    mode: str = "within"  # subject_time_window: within | avoid
+    limit: int = 0  # max_subjects_per_day / teacher_max_days_per_week
+    label: str = ""  # shown in error messages
 
 
 @dataclass
@@ -125,6 +183,18 @@ class ProblemData:
     # model_builder actually knows how to promote belong here.
     must_have_rules: set = field(default_factory=set)
     soft_avoid_rules: List[SoftAvoidRule] = field(default_factory=list)
+    custom_rules: List[CustomRule] = field(default_factory=list)
+    # Admin-typed numbers for the priorities that take one (see
+    # app/solver/weights.py::RULE_PARAM_DEFAULTS), already sanitised.
+    rule_params: Dict[str, int] = field(default_factory=lambda: {
+        "max_consecutive_teaching": 2, "max_teacher_periods_per_day": 4,
+    })
+    # section_id -> slot indices that section is already committed to by a
+    # timetable outside this solve (a published host class a repeater attends,
+    # or the published main timetable a remedial run is built around). Any
+    # attending demand must avoid them; the validator rechecks it.
+    section_busy_slot_indices: Dict[str, set] = field(default_factory=dict)
+    rotation_groups: List[RotationGroup] = field(default_factory=list)
 
 
 @dataclass
@@ -136,8 +206,16 @@ class ScheduledSession:
     parent_section_id: str
     start_slot_index: int
     duration: int
-    room_id: str
-    teacher_id: str
+    room_id: Optional[str]
+    teacher_id: Optional[str]
+    # Teachers beyond the first, when the subject needs several at once.
+    # teacher_id is always teacher_ids[0]; use `teacher_ids` for anything
+    # that counts load or looks for clashes.
+    co_teacher_ids: List[str] = field(default_factory=list)
+
+    @property
+    def teacher_ids(self) -> List[str]:
+        return [t for t in (self.teacher_id, *self.co_teacher_ids) if t]
 
 
 @dataclass

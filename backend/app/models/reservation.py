@@ -3,6 +3,10 @@ from sqlalchemy.orm import relationship
 from app.db import Base
 
 
+# Reservation.source value for rows imported from the central first-year PDF.
+FIRST_YEAR_SOURCE = "first_year_central"
+
+
 class Reservation(Base):
     """A frozen booking a NEW solve must treat as hard unavailability.
 
@@ -28,5 +32,12 @@ class Reservation(Base):
     period = Column(Integer, nullable=False)
     source_run_id = Column(Integer, ForeignKey("timetable_runs.id", ondelete="SET NULL"), nullable=True)
     reason = Column(String, nullable=True)
+    # Who created the row. "first_year_central" = imported from the central
+    # first-year timetable PDF: always applied (even to a fresh run) and
+    # replaced wholesale on re-upload. None = created by a run/department.
+    source = Column(String, nullable=True)
+    # The first-year class tile this lock belongs to (see FirstYearTile), so
+    # the by-teacher/by-room views can draw the whole class, not a bare slot.
+    tile_id = Column(Integer, ForeignKey("first_year_tiles.id", ondelete="SET NULL"), nullable=True)
 
     source_run = relationship("TimetableRun", backref="reservations")

@@ -54,6 +54,16 @@ class Subject(Base):
       this per-subject, globally or restricted to a specific day/time
       window (e.g. "only merge them Tuesday 10-12, when the one teacher
       qualified for this subject is free").
+      None of these modes can express "run THIS lab and THAT lab at the
+      same time, one batch in each, and swap next round" - that spans
+      several subjects, so it lives in LabRotationGroup instead.
+    teachers_required: how many qualified teachers one session of this
+      subject needs AT ONCE - 1 for an ordinary class, 2+ for a lab that
+      genuinely needs a second supervisor on the floor. The solver picks
+      that many DISTINCT eligible teachers and keeps all of them free for
+      the whole block; the extra ones are persisted on the entry as
+      `co_teacher_ids`. Weekly teacher consistency applies to the whole
+      set, exactly as it does to a single teacher.
     """
     __tablename__ = "subjects"
 
@@ -81,6 +91,11 @@ class Subject(Base):
     periods_per_session = Column(Integer, default=1)
     back_to_back = Column(Boolean, default=True)
     batch_scheduling_mode = Column(String, default="independent")  # independent | parallel | sequential | merged
+    teachers_required = Column(Integer, default=1)  # distinct teachers needed simultaneously
+    # One-period self-study blocks per week for a subject that is not taught
+    # in person (an NPTEL elective). Placed only in the first or last period
+    # of a day, with no teacher and no room.
+    self_study_hours = Column(Integer, default=0)
 
     max_per_day = Column(Integer, default=1)  # hard cap: same subject at most N times/day
     requires_room_type = Column(String, nullable=True)  # lecture, lab, seminar
