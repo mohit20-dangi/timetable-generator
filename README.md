@@ -46,7 +46,97 @@ verification a solver-authored one gets, with none of the guarantees.
 
 ## Quick start
 
-### Backend
+### Option 1: Docker (Recommended for Production / College Deployment)
+
+**One-command deployment on any Linux machine with Docker:**
+
+```bash
+# 1. Clone the repo
+git clone <your-repo-url>
+cd timetable-generator
+
+# 2. Configure environment
+cp .env.example .env
+# Edit .env and set JWT_SECRET_KEY at minimum (generate with: python -c "import secrets; print(secrets.token_urlsafe(48))")
+
+# 3. Start everything (uses PostgreSQL with your data pre-loaded)
+./deploy.sh start
+# Or on Windows: deploy.bat start
+```
+
+That's it! Access the app at:
+- **Frontend**: http://localhost
+- **Backend API**: http://localhost:8000
+- **API Docs**: http://localhost:8000/docs
+
+**Useful commands:**
+```bash
+./deploy.sh logs      # View live logs
+./deploy.sh stop      # Stop services
+./deploy.sh restart   # Restart services
+./deploy.sh update    # Pull updates and rebuild
+./deploy.sh status    # Check service status
+```
+
+---
+
+### Database: PostgreSQL with Your Data Pre-Loaded
+
+The Docker setup uses **PostgreSQL** with your existing SQLite data automatically migrated:
+
+1. **Your SQLite data** (`backend/timetable.db`) has been converted to `backend/init_postgres.sql`
+2. **On first Docker startup**, PostgreSQL automatically runs this SQL file to create tables and insert all your data
+3. **No manual migration needed** - just run `./deploy.sh start`
+
+**To regenerate the SQL dump** (if you update your local SQLite database):
+```bash
+python migrate_sqlite_to_postgres.py backend/timetable.db backend/init_postgres.sql
+```
+
+**To use a different SQLite backup file:**
+```bash
+python migrate_sqlite_to_postgres.py backend/timetable.db.pre-rotation-backup backend/init_postgres.sql
+```
+
+---
+
+### Shipping to College System (Without Git)
+
+**The `backend/init_postgres.sql` file contains ALL your data** and can be copied directly to the college machine:
+
+```bash
+# On your machine - copy the SQL dump
+scp backend/init_postgres.sql user@college-machine:/path/to/project/backend/
+
+# On college machine - just run deploy
+cd /path/to/project
+./deploy.sh start
+```
+
+**Files to copy to college machine (no git needed):**
+```
+timetable-generator/
+├── docker-compose.yml
+├── .env.example          → copy to .env and edit
+├── deploy.sh
+├── backend/
+│   ├── Dockerfile
+│   ├── entrypoint.sh
+│   ├── requirements.txt
+│   ├── init_postgres.sql  ← YOUR DATA (331 KB)
+│   └── app/               ← source code
+└── frontend/
+    ├── Dockerfile
+    ├── nginx.conf
+    ├── package.json
+    └── src/               ← source code
+```
+
+---
+
+### Option 2: Local Development (Manual Setup)
+
+#### Backend
 
 ```bash
 cd backend
@@ -61,7 +151,7 @@ SQLite is used automatically in development (`DATABASE_URL=sqlite:///./timetable
 the schema is created on startup. For production, point `DATABASE_URL` at PostgreSQL and run Alembic
 migrations instead (see **Production** below).
 
-### Frontend
+#### Frontend
 
 ```bash
 cd frontend
@@ -69,7 +159,7 @@ npm install
 npm run dev       # http://localhost:5173, proxies /api to :8000
 ```
 
-### Seed example data
+#### Seed example data
 
 ```bash
 cd backend

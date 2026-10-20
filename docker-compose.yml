@@ -1,0 +1,77 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database (with auto-initialization from SQLite dump)
+  db:
+    image: postgres:16-alpine
+    container_name: timetable-db
+    environment:
+      POSTGRES_DB: timetable
+      POSTGRES_USER: timetable
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-timetable123}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Mount the generated SQL dump for auto-initialization
+      - ./backend/init_postgres.sql:/docker-entrypoint-initdb.d/init_postgres.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U timetable -d timetable"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - timetable-network
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: timetable-backend
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql://timetable:${DB_PASSWORD:-timetable123}@db:5432/timetable
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-your-super-secret-jwt-key-change-in-production}
+      JWT_ALGORITHM: HS256
+      JWT_EXPIRE_MINUTES: 10080
+      CORS_ORIGINS: '["http://localhost","http://localhost:5173","http://localhost:3000","http://your-college-domain.com"]'
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      LLM_MODEL: ${LLM_MODEL:-anthropic/claude-opus-4.5}
+      SOLVER_MAX_SECONDS: ${SOLVER_MAX_SECONDS:-300}
+      SOLVER_NUM_WORKERS: ${SOLVER_NUM_WORKERS:-8}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - timetable-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Frontend (served via Nginx)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: timetable-frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+    networks:
+      - timetable-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  timetable-network:
+    driver: bridge
