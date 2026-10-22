@@ -64,7 +64,14 @@ def test_unsatisfiable_hard_rule_fails_with_a_clear_message(client):
     run = client.get(f"/api/timetable/runs/{run_id}", headers=h).json()
     assert run["status"] == "failed"
     # The admin must be told WHICH rule/subject is impossible, not just "failed".
-    assert "room for only 1 session" in run["llm_explanation"] and "Maths" in run["llm_explanation"]
+    # Check for key concepts semantically (LLM phrasing varies)
+    explanation = run["llm_explanation"].lower()
+    assert "maths" in explanation
+    assert any(phrase in explanation for phrase in [
+        "one slot", "one session", "only one", "single slot", "narrow time window",
+        "only allows one", "allows only one"
+    ])
+    assert "preflight" in explanation or "blocked" in explanation or "failed" in explanation
 
 
 def test_rule_payloads_are_validated(client):
